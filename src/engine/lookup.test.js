@@ -20,11 +20,11 @@ const quiet = { onCollision: () => {} };
 
 const ctx = (over = {}) => ({ tableSizeRows: 50_000_000, writesPerSec: 2000, edition: null, onlineFlag: null, ...over });
 
-test('Postgres 16 + add_column_constant_default → safe, metadata-only (v11plus rule)', () => {
+test('Postgres 16 + add_column_constant_default → safe, no rewrite (v11plus rule)', () => {
   const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'add_column_constant_default', context: ctx() }, rules, quiet);
   assert.equal(v.matchedRuleId, 'pg_add_col_const_v11plus');
   assert.equal(v.severity, 'safe');
-  assert.equal(v.lockType, 'metadata-only');
+  assert.equal(v.lockType, 'ACCESS EXCLUSIVE (brief)');
   assert.equal(v.rewritesTable, false);
   assert.equal(v.estDurationSeconds, null);
   assert.equal(v.estDurationLabel, 'instant');
@@ -61,18 +61,19 @@ test('SQL Server 2019 + create_index + enterprise → caution (ONLINE rule wins)
   assert.equal(v.blocksWrites, false);
 });
 
-test('SQL Server 2019 + create_index + standard → danger (offline; edition rule excluded)', () => {
+test('SQL Server 2019 + create_index + standard → caution (offline NC build: S lock, reads+writes continue)', () => {
   const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'create_index', context: ctx({ edition: 'standard' }) }, rules, quiet);
   assert.equal(v.matchedRuleId, 'mssql_create_index_offline');
-  assert.equal(v.severity, 'danger');
-  assert.equal(v.blocksWrites, true);
-  assert.equal(v.blocksReads, true);
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.blocksWrites, false);
+  assert.equal(v.blocksReads, false);
+  assert.equal(v.lockType, 'S (shared)');
 });
 
-test('SQL Server 2019 + create_index + edition null → danger (falls through to offline)', () => {
+test('SQL Server 2019 + create_index + edition null → caution (falls through to offline)', () => {
   const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'create_index', context: ctx({ edition: null }) }, rules, quiet);
   assert.equal(v.matchedRuleId, 'mssql_create_index_offline');
-  assert.equal(v.severity, 'danger');
+  assert.equal(v.severity, 'caution');
 });
 
 test('Unknown operation → caution fallback, no crash', () => {
@@ -202,11 +203,12 @@ test('rename_column: MySQL 8 → safe (metadata-only RENAME COLUMN)', () => {
   assert.equal(v.severity, 'safe');
 });
 
-test('rename_column: MySQL 5.7 → danger (CHANGE COLUMN may rebuild)', () => {
+test('rename_column: MySQL 5.7 → caution (CHANGE COLUMN, pure rename is online INPLACE)', () => {
   const v = resolveVerdict({ engine: 'mysql', version: '5.7', operation: 'rename_column', context: ctx() }, rules, quiet);
   assert.equal(v.matchedRuleId, 'mysql_rename_column_pre8');
-  assert.equal(v.severity, 'danger');
-  assert.equal(v.rewritesTable, true);
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.rewritesTable, false);
+  assert.equal(v.blocksWrites, false);
 });
 
 test('rename_column: SQL Server → caution (sp_rename breaks dependencies)', () => {
@@ -305,11 +307,11 @@ test('create_index_concurrent: SQL Server enterprise → caution (ONLINE=ON)', (
   assert.equal(v.severity, 'caution');
 });
 
-test('create_index_concurrent: SQL Server standard → danger (ONLINE unavailable)', () => {
+test('create_index_concurrent: SQL Server standard → caution (ONLINE unavailable; offline NC build allows reads+writes)', () => {
   const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'create_index_concurrent', context: ctx({ edition: 'standard' }) }, rules, quiet);
   assert.equal(v.matchedRuleId, 'mssql_create_index_concurrent_offline');
-  assert.equal(v.severity, 'danger');
-  assert.equal(v.blocksWrites, true);
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.blocksWrites, false);
 });
 
 test('no accidental rule collisions across the whole knowledge base', () => {

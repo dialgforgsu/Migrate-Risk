@@ -8,16 +8,16 @@
       "versionMin": 11,
       "verdict": {
         "severity": "safe",
-        "lockType": "metadata-only",
+        "lockType": "ACCESS EXCLUSIVE (brief)",
         "blocksReads": false,
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "instant",
-        "explanation": "Postgres 11+ stores a constant default in the catalog, so adding the column is a metadata-only change regardless of table size.",
+        "explanation": "Postgres 11+ stores a constant default in the catalog, so adding the column is a metadata change with no table rewrite, regardless of table size. ALTER TABLE still takes an ACCESS EXCLUSIVE lock, but only momentarily.",
         "safeAlternative": null,
-        "caveats": ["Only applies when the default is a constant. A volatile default (e.g. now(), random()) still rewrites the table."],
+        "caveats": ["Only applies when the default is a constant. A volatile default (e.g. now(), random()) still rewrites the table.", "The brief ACCESS EXCLUSIVE lock can queue behind a long-running transaction; the speed comes from skipping the rewrite, not from a weaker lock."],
         "redgateHook": "Flyway tracks this as a versioned migration so the safe pattern is repeatable across environments.",
-        "citations": ["Postgres docs: a constant column default added in v11+ does not rewrite existing rows."]
+        "citations": ["Postgres docs (ALTER TABLE): a non-volatile (constant) column default added in v11+ does not rewrite existing rows. https://www.postgresql.org/docs/current/sql-altertable.html"]
       }
     },
     {
@@ -158,11 +158,11 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "index_build",
-        "explanation": "With ONLINE=ON (Enterprise edition), the index build avoids a long blocking lock; only a brief Sch-M lock at start and finish.",
+        "explanation": "With ONLINE=ON (Enterprise edition), the index build holds only an intent-shared lock during the main build, with brief shared/Sch-M locks at the start and finish — reads and writes keep flowing.",
         "safeAlternative": null,
-        "caveats": ["ONLINE=ON is Enterprise-only. On Standard edition this option is unavailable and the build blocks."],
+        "caveats": ["ONLINE=ON requires Enterprise edition (also available on Azure SQL Database and Azure SQL Managed Instance). On Standard edition the option is unavailable.", "The brief boundary locks wait for in-flight transactions to drain, which can form a short blocking chain."],
         "redgateHook": "SQL Change Automation can enforce ONLINE=ON where the edition supports it.",
-        "citations": ["SQL Server docs: ONLINE=ON index operations require Enterprise edition."]
+        "citations": ["SQL Server docs: ONLINE=ON index operations require Enterprise edition (and are supported on Azure SQL Database / Managed Instance). https://learn.microsoft.com/en-us/sql/relational-databases/indexes/how-online-index-operations-work"]
       }
     },
     {
@@ -170,21 +170,21 @@
       "engine": "sqlserver",
       "operation": "create_index",
       "verdict": {
-        "severity": "danger",
-        "lockType": "Sch-M",
-        "blocksReads": true,
-        "blocksWrites": true,
+        "severity": "caution",
+        "lockType": "S (shared)",
+        "blocksReads": false,
+        "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "index_build",
-        "explanation": "An offline index build (Standard edition default) takes a Sch-M lock that blocks reads and writes for the whole build.",
+        "explanation": "Creating a NONCLUSTERED index offline (the Standard-edition default) takes a shared (S) lock that allows reads and data modifications but blocks schema changes. It can still stall a busy table because it waits for in-flight write transactions to drain before it starts.",
         "safeAlternative": {
-          "title": "Build during a maintenance window, or upgrade edition",
-          "steps": ["Schedule the build in an approved downtime window", "Or use ONLINE=ON if on Enterprise edition"],
-          "estLockLabel": "blocks for full build"
+          "title": "Use ONLINE=ON, or a maintenance window for clustered builds",
+          "steps": ["On Enterprise (or Azure SQL), add WITH (ONLINE=ON) to minimise the boundary locks", "For a CLUSTERED/spatial/XML index, schedule it in a downtime window — that path takes a Sch-M lock"],
+          "estLockLabel": "reads & writes continue (nonclustered)"
         },
-        "caveats": ["This is the default on Standard edition — the ONLINE=ON trap catches many teams."],
-        "redgateHook": "Redgate flags edition-dependent operations before they reach production.",
-        "citations": ["SQL Server docs: offline index builds hold a Sch-M lock blocking access."]
+        "caveats": ["This is the nonclustered case. Creating a CLUSTERED, spatial, or XML index offline — or rebuilding/dropping any index — instead takes a Sch-M lock that blocks ALL reads and writes for the whole operation.", "The S lock waits for uncommitted writes to complete before it starts, which can form a blocking chain on a busy table.", "Large builds consume significant I/O even though they do not block DML."],
+        "redgateHook": "Redgate flags edition-dependent operations and clustered-vs-nonclustered differences before they reach production.",
+        "citations": ["SQL Server docs (CREATE INDEX): an offline operation that CREATES a nonclustered index takes a shared (S) lock that allows reading and modifying data; creating a clustered/spatial/XML index, or rebuilding/dropping any index, takes a Sch-M lock that blocks all access. https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql"]
       }
     },
 
@@ -420,21 +420,17 @@
       "operation": "rename_column",
       "versionMax": 7,
       "verdict": {
-        "severity": "danger",
-        "lockType": "metadata + COPY",
+        "severity": "caution",
+        "lockType": "metadata-only (INPLACE)",
         "blocksReads": false,
-        "blocksWrites": true,
-        "rewritesTable": true,
-        "estDurationModel": "rewrite",
-        "explanation": "Before MySQL 8.0 there is no RENAME COLUMN; you must use CHANGE COLUMN and restate the full definition, which can trigger an ALGORITHM=COPY table rebuild that blocks writes.",
-        "safeAlternative": {
-          "title": "Online schema change tool",
-          "steps": ["Use gh-ost or pt-online-schema-change to rename via a shadow table", "Writes keep flowing through triggers/binlog", "Atomic cutover at the end"],
-          "estLockLabel": "brief cutover lock only"
-        },
-        "caveats": ["CHANGE COLUMN requires repeating the exact column definition — an omitted attribute silently changes the column.", "Upgrading to 8.0 gives you a true metadata-only RENAME COLUMN."],
-        "redgateHook": "Redgate integrates online-schema-change tooling into a tracked, reviewable migration.",
-        "citations": ["MySQL docs: prior to 8.0, renaming requires CHANGE COLUMN, which may copy the table."]
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "instant",
+        "explanation": "MySQL 5.7 has no RENAME COLUMN syntax — you rename via CHANGE COLUMN. As long as you keep the same data type and attributes, this runs ALGORITHM=INPLACE, LOCK=NONE: a metadata-only change that permits concurrent reads and writes.",
+        "safeAlternative": null,
+        "caveats": ["CHANGE COLUMN requires restating the column's full definition. If you also change the data type or nullability, it forces ALGORITHM=COPY — a blocking table rebuild. For a pure rename, keep every other attribute identical.", "Upgrading to 8.0 gives you dedicated RENAME COLUMN syntax that removes this footgun."],
+        "redgateHook": "Redgate captures the exact CHANGE COLUMN definition in a reviewable migration so a rename doesn't silently alter the column.",
+        "citations": ["MySQL 5.7 docs (Online DDL): renaming a column, keeping the same data type, is performed in place and permits concurrent DML. https://dev.mysql.com/doc/refman/5.7/en/innodb-online-ddl-operations.html"]
       }
     },
     {
@@ -473,9 +469,9 @@
           "steps": ["Add a new column of the target type (instant)", "Backfill values in batches, optionally with a trigger to keep it in sync", "Swap names in a brief transaction once caught up, then drop the old column"],
           "estLockLabel": "<100ms cutover"
         },
-        "caveats": ["Some conversions skip the rewrite when the new type is binary-coercible from the old (e.g. increasing varchar(n) length); int → bigint is NOT exempt. Verify your specific conversion.", "A USING expression always forces a rewrite."],
+        "caveats": ["Some conversions skip the rewrite when the new type is binary-coercible from the old (e.g. increasing varchar(n) length); int → bigint is NOT exempt. Verify your specific conversion.", "A USING expression that changes the column contents forces a rewrite; a content-preserving USING over a binary-coercible type does not. Indexes on the column are rebuilt either way."],
         "redgateHook": "SQL Change Automation generates the add-backfill-swap sequence as a single batched, lock-safe migration.",
-        "citations": ["Postgres docs: ALTER COLUMN TYPE rewrites the table unless the new type is binary-coercible from the old one."]
+        "citations": ["Postgres docs (ALTER TABLE): changing a column type rewrites the table unless the USING clause does not change the column contents and the old type is binary-coercible to the new type. https://www.postgresql.org/docs/current/sql-altertable.html"]
       }
     },
     {
@@ -508,14 +504,14 @@
       "versionMin": 11,
       "verdict": {
         "severity": "safe",
-        "lockType": "metadata-only",
+        "lockType": "ACCESS EXCLUSIVE (brief)",
         "blocksReads": false,
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "instant",
-        "explanation": "On Postgres 11+, adding a NOT NULL column with a constant default is a metadata-only catalog change — the default is stored once, not written to every row.",
+        "explanation": "On Postgres 11+, adding a NOT NULL column with a constant default stores the default once in the catalog rather than writing it to every row, so there is no table rewrite. ALTER TABLE still takes a brief ACCESS EXCLUSIVE lock.",
         "safeAlternative": null,
-        "caveats": ["A NOT NULL column needs a default on a non-empty table, or the statement fails.", "This is metadata-only only for a constant default; a volatile default (now(), random()) still rewrites the whole table."],
+        "caveats": ["A NOT NULL column needs a default on a non-empty table, or the statement fails.", "No rewrite only for a constant default; a volatile default (now(), random()) still rewrites the whole table.", "The brief ACCESS EXCLUSIVE lock can queue behind a long-running transaction."],
         "redgateHook": "Flyway tracks the constant-default pattern so the safe, instant path is repeatable across environments.",
         "citations": ["Postgres docs: a constant column default added in v11+ does not rewrite existing rows, including for NOT NULL columns."]
       }
@@ -647,16 +643,16 @@
       "operation": "create_index_concurrent",
       "verdict": {
         "severity": "safe",
-        "lockType": "metadata-only (INPLACE)",
+        "lockType": "INPLACE, LOCK=NONE",
         "blocksReads": false,
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "index_build",
-        "explanation": "InnoDB builds a secondary index with ALGORITHM=INPLACE, LOCK=NONE by default — reads and writes continue throughout, with only brief metadata locks at start and finish.",
+        "explanation": "InnoDB builds a secondary index with ALGORITHM=INPLACE, LOCK=NONE by default — the table remains available for reads and writes throughout, with only brief metadata locks at start and finish.",
         "safeAlternative": null,
-        "caveats": ["FULLTEXT and SPATIAL index builds take a more restrictive lock and are not fully online.", "The build still consumes I/O and can slow a busy server even though it does not block."],
+        "caveats": ["FULLTEXT and SPATIAL index builds take a more restrictive lock and do not permit concurrent DML.", "The index data structure is still built (it is not purely a metadata change), so the build consumes I/O and can slow a busy server even though it does not block."],
         "redgateHook": "Flyway records the online index build so it deploys identically across environments.",
-        "citations": ["MySQL docs: secondary index creation supports ALGORITHM=INPLACE, LOCK=NONE; FULLTEXT/SPATIAL indexes are exceptions."]
+        "citations": ["MySQL docs (Online DDL): creating a secondary index supports ALGORITHM=INPLACE, LOCK=NONE and keeps the table available for read and write; FULLTEXT/SPATIAL indexes are exceptions. https://dev.mysql.com/doc/refman/8.0/en/innodb-online-ddl-operations.html"]
       }
     },
     {
@@ -671,11 +667,11 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "index_build",
-        "explanation": "With ONLINE=ON (Enterprise edition), the index build avoids a long blocking lock — only a brief Sch-M lock at the start and finish.",
+        "explanation": "With ONLINE=ON (Enterprise edition), the index build holds only an intent-shared lock during the main build, with brief shared/Sch-M locks at the start and finish — reads and writes keep flowing.",
         "safeAlternative": null,
-        "caveats": ["ONLINE=ON is Enterprise-only. On Standard this option is unavailable and the build blocks reads and writes."],
+        "caveats": ["ONLINE=ON requires Enterprise edition (also available on Azure SQL Database and Azure SQL Managed Instance). On Standard edition the option is unavailable."],
         "redgateHook": "SQL Change Automation enforces ONLINE=ON where the edition supports it.",
-        "citations": ["SQL Server docs: ONLINE=ON index operations require Enterprise edition."]
+        "citations": ["SQL Server docs: ONLINE=ON index operations require Enterprise edition (and are supported on Azure SQL Database / Managed Instance). https://learn.microsoft.com/en-us/sql/relational-databases/indexes/how-online-index-operations-work"]
       }
     },
     {
@@ -683,21 +679,21 @@
       "engine": "sqlserver",
       "operation": "create_index_concurrent",
       "verdict": {
-        "severity": "danger",
-        "lockType": "Sch-M",
-        "blocksReads": true,
-        "blocksWrites": true,
+        "severity": "caution",
+        "lockType": "S (shared)",
+        "blocksReads": false,
+        "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "index_build",
-        "explanation": "You asked for an online build, but ONLINE=ON is unavailable on Standard edition — the build falls back to offline and takes a Sch-M lock that blocks reads and writes for the whole build.",
+        "explanation": "ONLINE=ON is unavailable on Standard edition, so the build runs offline. For a nonclustered index that is a shared (S) lock that allows reads and data modifications but blocks schema changes — and it waits for in-flight writes to drain before starting, which can stall a busy table.",
         "safeAlternative": {
-          "title": "Build during a maintenance window, or upgrade edition",
-          "steps": ["Schedule the build in an approved downtime window", "Or move to Enterprise edition to use ONLINE=ON"],
-          "estLockLabel": "blocks for full build"
+          "title": "Move to Enterprise/Azure for ONLINE, or a window for clustered builds",
+          "steps": ["Use Enterprise edition or Azure SQL to get WITH (ONLINE=ON)", "For a CLUSTERED/spatial/XML index, schedule it in a downtime window — that path takes a Sch-M lock that blocks everything"],
+          "estLockLabel": "reads & writes continue (nonclustered)"
         },
-        "caveats": ["This is the trap: requesting ONLINE=ON on Standard either errors or runs offline depending on syntax — confirm your edition before relying on it."],
+        "caveats": ["The trap is real but narrower than it looks: a nonclustered offline CREATE still allows reads and writes. A CLUSTERED/spatial/XML create — or any index rebuild/drop — takes a Sch-M lock that blocks all access.", "Confirm your edition before relying on ONLINE=ON; on Standard the keyword errors."],
         "redgateHook": "Redgate flags edition-dependent operations before they reach production.",
-        "citations": ["SQL Server docs: ONLINE=ON is not supported on Standard edition; the build runs offline under a Sch-M lock."]
+        "citations": ["SQL Server docs (CREATE INDEX): ONLINE=ON is unsupported on Standard; an offline nonclustered CREATE takes a shared (S) lock that allows reading and modifying data. https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql"]
       }
     }
   ]
