@@ -118,6 +118,144 @@ test('estimateDuration: index_build on 50M rows at 500k/s → 100s → "~2 min"'
   assert.equal(r.label, '~2 min');
 });
 
+// --- expanded batch: drop_column / add_foreign_key / add_not_null_constraint
+//     / rename_column / alter_column_type across all three engines ----
+
+test('drop_column: Postgres → caution, metadata (no rewrite, instant)', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'drop_column', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_drop_column');
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.rewritesTable, false);
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+test('drop_column: MySQL → caution, online INPLACE rebuild', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'drop_column', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_drop_column');
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.rewritesTable, true);
+  assert.equal(v.blocksWrites, false);
+});
+
+test('drop_column: SQL Server → caution, metadata (no rewrite, instant)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'drop_column', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_drop_column');
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.rewritesTable, false);
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+test('add_foreign_key: Postgres → danger, blocks writes not reads, NOT VALID alternative', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'add_foreign_key', context: ctx() }, rules, quiet);
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.blocksWrites, true);
+  assert.equal(v.blocksReads, false);
+  assert.match(v.safeAlternative.title, /NOT VALID/i);
+});
+
+test('add_foreign_key: MySQL → danger, COPY rebuild (foreign_key_checks default)', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'add_foreign_key', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_add_fk');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.rewritesTable, true);
+});
+
+test('add_foreign_key: SQL Server → danger, blocks reads and writes', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'add_foreign_key', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_add_fk');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.blocksReads, true);
+  assert.match(v.safeAlternative.steps.join(' '), /NOCHECK/i);
+});
+
+test('add_not_null_constraint: Postgres → danger, full scan under ACCESS EXCLUSIVE', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'add_not_null_constraint', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_add_not_null');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.blocksReads, true);
+  assert.equal(v.lockType, 'ACCESS EXCLUSIVE');
+});
+
+test('add_not_null_constraint: MySQL → caution, online INPLACE', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'add_not_null_constraint', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_add_not_null');
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.blocksWrites, false);
+});
+
+test('add_not_null_constraint: SQL Server → danger, Sch-M scan', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'add_not_null_constraint', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_add_not_null');
+  assert.equal(v.severity, 'danger');
+});
+
+test('rename_column: Postgres → safe, instant metadata', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'rename_column', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_rename_column');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+test('rename_column: MySQL 8 → safe (metadata-only RENAME COLUMN)', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'rename_column', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_rename_column_v8');
+  assert.equal(v.severity, 'safe');
+});
+
+test('rename_column: MySQL 5.7 → danger (CHANGE COLUMN may rebuild)', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '5.7', operation: 'rename_column', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_rename_column_pre8');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.rewritesTable, true);
+});
+
+test('rename_column: SQL Server → caution (sp_rename breaks dependencies)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'rename_column', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_rename_column');
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+test('alter_column_type: Postgres → danger, rewrites table', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'alter_column_type', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_alter_column_type');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.rewritesTable, true);
+});
+
+test('alter_column_type: SQL Server → danger, rewrites table', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'alter_column_type', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_alter_column_type');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.rewritesTable, true);
+});
+
+test('alter_column_type: MySQL still resolves (regression on existing rule)', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'alter_column_type', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_modify_column');
+  assert.equal(v.severity, 'danger');
+});
+
+test('no accidental rule collisions across the whole knowledge base', () => {
+  // Resolve every engine/version/operation the UI can produce; fail if any
+  // real lookup triggers the collision warning (two equally-specific rules).
+  const engines = { postgres: ['16', '10', '9.6'], mysql: ['8.0', '5.7'], sqlserver: ['2019'] };
+  const ops = ['add_column_constant_default', 'add_column_volatile_default', 'add_column_nullable', 'create_index', 'drop_column', 'add_foreign_key', 'add_not_null_constraint', 'rename_column', 'alter_column_type'];
+  const editions = [null, 'standard', 'enterprise'];
+  const collisions = [];
+  for (const [eng, versions] of Object.entries(engines)) {
+    for (const ver of versions) {
+      for (const op of ops) {
+        for (const ed of editions) {
+          resolveVerdict({ engine: eng, version: ver, operation: op, context: ctx({ edition: ed }) }, rules,
+            { onCollision: (msg, ids) => collisions.push(`${eng} ${ver} ${op} ed=${ed}: ${ids.join(',')}`) });
+        }
+      }
+    }
+  }
+  assert.deepEqual(collisions, [], 'unexpected rule collisions:\n' + collisions.join('\n'));
+});
+
 test('collision hook fires when two equally-specific rules match', () => {
   // Two generic (unbounded, no-edition) rules for the same engine/operation.
   const colliding = {
