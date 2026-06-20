@@ -499,6 +499,206 @@
         "redgateHook": "SQL Change Automation generates the add-backfill-swap pattern so a type change never blocks production.",
         "citations": ["SQL Server docs: ALTER COLUMN that changes type or size may update every row under a Sch-M lock."]
       }
+    },
+
+    {
+      "id": "pg_add_col_not_null_v11plus",
+      "engine": "postgres",
+      "operation": "add_column_not_null",
+      "versionMin": 11,
+      "verdict": {
+        "severity": "safe",
+        "lockType": "metadata-only",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "instant",
+        "explanation": "On Postgres 11+, adding a NOT NULL column with a constant default is a metadata-only catalog change — the default is stored once, not written to every row.",
+        "safeAlternative": null,
+        "caveats": ["A NOT NULL column needs a default on a non-empty table, or the statement fails.", "This is metadata-only only for a constant default; a volatile default (now(), random()) still rewrites the whole table."],
+        "redgateHook": "Flyway tracks the constant-default pattern so the safe, instant path is repeatable across environments.",
+        "citations": ["Postgres docs: a constant column default added in v11+ does not rewrite existing rows, including for NOT NULL columns."]
+      }
+    },
+    {
+      "id": "pg_add_col_not_null_pre11",
+      "engine": "postgres",
+      "operation": "add_column_not_null",
+      "versionMax": 10,
+      "verdict": {
+        "severity": "danger",
+        "lockType": "ACCESS EXCLUSIVE",
+        "blocksReads": true,
+        "blocksWrites": true,
+        "rewritesTable": true,
+        "estDurationModel": "rewrite",
+        "explanation": "Before Postgres 11, adding a NOT NULL column writes the default into every row, rewriting the whole table under an ACCESS EXCLUSIVE lock.",
+        "safeAlternative": {
+          "title": "Add nullable, backfill, then constrain",
+          "steps": ["ADD COLUMN nullable with no default (instant)", "Backfill the value in batches", "SET NOT NULL once backfilled (validates under a brief lock)"],
+          "estLockLabel": "<100ms per step"
+        },
+        "caveats": ["A NOT NULL column requires a default on a non-empty table."],
+        "redgateHook": "SQL Change Automation generates the add-backfill-constrain sequence as one batched migration.",
+        "citations": ["Postgres docs: pre-11 column defaults trigger a full table rewrite."]
+      }
+    },
+    {
+      "id": "mysql_add_col_not_null_v8",
+      "engine": "mysql",
+      "operation": "add_column_not_null",
+      "versionMin": 8,
+      "verdict": {
+        "severity": "safe",
+        "lockType": "metadata-only",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "instant",
+        "explanation": "MySQL 8.0 INSTANT DDL can add a NOT NULL column with a default as a metadata-only change in milliseconds, regardless of table size.",
+        "safeAlternative": null,
+        "caveats": ["INSTANT requires a default and an eligible column (rules relaxed in 8.0.29+) — verify eligibility, or it falls back to an INPLACE rebuild.", "A NOT NULL column needs a default on a non-empty table."],
+        "redgateHook": "Flyway records the INSTANT migration so the same safe path runs in every environment.",
+        "citations": ["MySQL docs: ALGORITHM=INSTANT adds columns (including with defaults) as a metadata change in 8.0+."]
+      }
+    },
+    {
+      "id": "mysql_add_col_not_null_pre8",
+      "engine": "mysql",
+      "operation": "add_column_not_null",
+      "versionMax": 7,
+      "verdict": {
+        "severity": "caution",
+        "lockType": "metadata + INPLACE rebuild",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": true,
+        "estDurationModel": "rewrite",
+        "explanation": "On MySQL 5.7 there is no INSTANT add; adding a column runs ALGORITHM=INPLACE, rebuilding the table online (reads and writes continue) with only brief locks at start and finish.",
+        "safeAlternative": null,
+        "caveats": ["The INPLACE rebuild can run long on large tables and needs free disk roughly equal to the table size.", "Upgrading to 8.0 gives you a metadata-only INSTANT add."],
+        "redgateHook": "Flyway records the change so the same online path runs identically across environments.",
+        "citations": ["MySQL docs: prior to 8.0 INSTANT, ADD COLUMN uses ALGORITHM=INPLACE (online) but rebuilds the table."]
+      }
+    },
+    {
+      "id": "mssql_add_col_not_null_online_ent",
+      "engine": "sqlserver",
+      "operation": "add_column_not_null",
+      "editionRequired": "enterprise",
+      "verdict": {
+        "severity": "safe",
+        "lockType": "metadata-only",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "instant",
+        "explanation": "On Enterprise edition (SQL Server 2012+), adding a NOT NULL column with a runtime-constant default is a metadata-only online operation — the default is not physically written to existing rows.",
+        "safeAlternative": null,
+        "caveats": ["Only metadata-only when the default is a runtime constant; a non-deterministic default forces a size-of-data update.", "This optimization is Enterprise-only — on Standard the same statement rewrites every row."],
+        "redgateHook": "SQL Change Automation enforces the runtime-constant-default pattern where the edition supports it.",
+        "citations": ["SQL Server docs: adding a NOT NULL column with a constant default is an online, metadata-only operation on Enterprise edition (2012+)."]
+      }
+    },
+    {
+      "id": "mssql_add_col_not_null",
+      "engine": "sqlserver",
+      "operation": "add_column_not_null",
+      "verdict": {
+        "severity": "danger",
+        "lockType": "Sch-M",
+        "blocksReads": true,
+        "blocksWrites": true,
+        "rewritesTable": true,
+        "estDurationModel": "rewrite",
+        "explanation": "On Standard edition, adding a NOT NULL column writes the default into every existing row — a size-of-data operation that holds a Sch-M lock blocking reads and writes for the duration.",
+        "safeAlternative": {
+          "title": "Add nullable, backfill, then constrain",
+          "steps": ["Add the column as NULLable (metadata-only)", "Backfill the default in batches", "Add the NOT NULL constraint during a quiet window"],
+          "estLockLabel": "<100ms for the add"
+        },
+        "caveats": ["A NOT NULL column requires a default on a non-empty table.", "Upgrading to Enterprise enables the metadata-only online add for runtime-constant defaults."],
+        "redgateHook": "SQL Change Automation generates the add-backfill-constrain sequence so it never blocks production.",
+        "citations": ["SQL Server docs: on editions without the online add, populating a NOT NULL default updates every row under a Sch-M lock."]
+      }
+    },
+
+    {
+      "id": "pg_create_index_concurrent",
+      "engine": "postgres",
+      "operation": "create_index_concurrent",
+      "verdict": {
+        "severity": "safe",
+        "lockType": "SHARE UPDATE EXCLUSIVE",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "index_build",
+        "explanation": "CREATE INDEX CONCURRENTLY builds the index without blocking reads or writes, taking only a SHARE UPDATE EXCLUSIVE lock. It is slower (two table scans) but production-safe.",
+        "safeAlternative": null,
+        "caveats": ["CONCURRENTLY cannot run inside a transaction block.", "If the build fails it leaves an INVALID index that you must DROP and recreate.", "It does two passes, so it takes longer than a plain CREATE INDEX."],
+        "redgateHook": "Flyway can run CONCURRENTLY builds as standalone migrations outside a transaction so the safe pattern is automated.",
+        "citations": ["Postgres docs: CREATE INDEX CONCURRENTLY does not block writes but cannot run in a transaction block and may leave an invalid index on failure."]
+      }
+    },
+    {
+      "id": "mysql_create_index_concurrent",
+      "engine": "mysql",
+      "operation": "create_index_concurrent",
+      "verdict": {
+        "severity": "safe",
+        "lockType": "metadata-only (INPLACE)",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "index_build",
+        "explanation": "InnoDB builds a secondary index with ALGORITHM=INPLACE, LOCK=NONE by default — reads and writes continue throughout, with only brief metadata locks at start and finish.",
+        "safeAlternative": null,
+        "caveats": ["FULLTEXT and SPATIAL index builds take a more restrictive lock and are not fully online.", "The build still consumes I/O and can slow a busy server even though it does not block."],
+        "redgateHook": "Flyway records the online index build so it deploys identically across environments.",
+        "citations": ["MySQL docs: secondary index creation supports ALGORITHM=INPLACE, LOCK=NONE; FULLTEXT/SPATIAL indexes are exceptions."]
+      }
+    },
+    {
+      "id": "mssql_create_index_concurrent_ent",
+      "engine": "sqlserver",
+      "operation": "create_index_concurrent",
+      "editionRequired": "enterprise",
+      "verdict": {
+        "severity": "caution",
+        "lockType": "Sch-M (brief)",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "index_build",
+        "explanation": "With ONLINE=ON (Enterprise edition), the index build avoids a long blocking lock — only a brief Sch-M lock at the start and finish.",
+        "safeAlternative": null,
+        "caveats": ["ONLINE=ON is Enterprise-only. On Standard this option is unavailable and the build blocks reads and writes."],
+        "redgateHook": "SQL Change Automation enforces ONLINE=ON where the edition supports it.",
+        "citations": ["SQL Server docs: ONLINE=ON index operations require Enterprise edition."]
+      }
+    },
+    {
+      "id": "mssql_create_index_concurrent_offline",
+      "engine": "sqlserver",
+      "operation": "create_index_concurrent",
+      "verdict": {
+        "severity": "danger",
+        "lockType": "Sch-M",
+        "blocksReads": true,
+        "blocksWrites": true,
+        "rewritesTable": false,
+        "estDurationModel": "index_build",
+        "explanation": "You asked for an online build, but ONLINE=ON is unavailable on Standard edition — the build falls back to offline and takes a Sch-M lock that blocks reads and writes for the whole build.",
+        "safeAlternative": {
+          "title": "Build during a maintenance window, or upgrade edition",
+          "steps": ["Schedule the build in an approved downtime window", "Or move to Enterprise edition to use ONLINE=ON"],
+          "estLockLabel": "blocks for full build"
+        },
+        "caveats": ["This is the trap: requesting ONLINE=ON on Standard either errors or runs offline depending on syntax — confirm your edition before relying on it."],
+        "redgateHook": "Redgate flags edition-dependent operations before they reach production.",
+        "citations": ["SQL Server docs: ONLINE=ON is not supported on Standard edition; the build runs offline under a Sch-M lock."]
+      }
     }
   ]
 }

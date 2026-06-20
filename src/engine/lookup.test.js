@@ -236,11 +236,87 @@ test('alter_column_type: MySQL still resolves (regression on existing rule)', ()
   assert.equal(v.severity, 'danger');
 });
 
+// --- final batch: add_column_not_null + create_index_concurrent ------
+
+test('add_column_not_null: Postgres 16 → safe, metadata (constant default)', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'add_column_not_null', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_add_col_not_null_v11plus');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+test('add_column_not_null: Postgres 10 → danger, rewrites', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '10', operation: 'add_column_not_null', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_add_col_not_null_pre11');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.rewritesTable, true);
+});
+
+test('add_column_not_null: MySQL 8 → safe, INSTANT', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'add_column_not_null', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_add_col_not_null_v8');
+  assert.equal(v.severity, 'safe');
+});
+
+test('add_column_not_null: MySQL 5.7 → caution, INPLACE rebuild', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '5.7', operation: 'add_column_not_null', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_add_col_not_null_pre8');
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.rewritesTable, true);
+});
+
+test('add_column_not_null: SQL Server enterprise → safe (online metadata add)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'add_column_not_null', context: ctx({ edition: 'enterprise' }) }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_add_col_not_null_online_ent');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.blocksWrites, false);
+});
+
+test('add_column_not_null: SQL Server standard → danger (size-of-data update)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'add_column_not_null', context: ctx({ edition: 'standard' }) }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_add_col_not_null');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.rewritesTable, true);
+});
+
+test('add_column_not_null: SQL Server edition null → danger (falls through)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'add_column_not_null', context: ctx({ edition: null }) }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_add_col_not_null');
+  assert.equal(v.severity, 'danger');
+});
+
+test('create_index_concurrent: Postgres → safe, no read/write block', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'create_index_concurrent', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_create_index_concurrent');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.blocksReads, false);
+  assert.equal(v.blocksWrites, false);
+});
+
+test('create_index_concurrent: MySQL → safe, online INPLACE', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'create_index_concurrent', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_create_index_concurrent');
+  assert.equal(v.severity, 'safe');
+});
+
+test('create_index_concurrent: SQL Server enterprise → caution (ONLINE=ON)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'create_index_concurrent', context: ctx({ edition: 'enterprise' }) }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_create_index_concurrent_ent');
+  assert.equal(v.severity, 'caution');
+});
+
+test('create_index_concurrent: SQL Server standard → danger (ONLINE unavailable)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'create_index_concurrent', context: ctx({ edition: 'standard' }) }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_create_index_concurrent_offline');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.blocksWrites, true);
+});
+
 test('no accidental rule collisions across the whole knowledge base', () => {
   // Resolve every engine/version/operation the UI can produce; fail if any
   // real lookup triggers the collision warning (two equally-specific rules).
   const engines = { postgres: ['16', '10', '9.6'], mysql: ['8.0', '5.7'], sqlserver: ['2019'] };
-  const ops = ['add_column_constant_default', 'add_column_volatile_default', 'add_column_nullable', 'create_index', 'drop_column', 'add_foreign_key', 'add_not_null_constraint', 'rename_column', 'alter_column_type'];
+  const ops = ['add_column_constant_default', 'add_column_volatile_default', 'add_column_nullable', 'add_column_not_null', 'create_index', 'create_index_concurrent', 'drop_column', 'add_foreign_key', 'add_not_null_constraint', 'rename_column', 'alter_column_type'];
   const editions = [null, 'standard', 'enterprise'];
   const collisions = [];
   for (const [eng, versions] of Object.entries(engines)) {
