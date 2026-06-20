@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "pg_add_col_const_v11plus",
+      "engine": "postgres",
+      "operation": "add_column_constant_default",
+      "versionMin": 11,
+      "verdict": {
+        "severity": "safe",
+        "lockType": "metadata-only",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "instant",
+        "explanation": "Postgres 11+ stores a constant default in the catalog, so adding the column is a metadata-only change regardless of table size.",
+        "safeAlternative": null,
+        "caveats": ["Only applies when the default is a constant. A volatile default (e.g. now(), random()) still rewrites the table."],
+        "redgateHook": "Flyway tracks this as a versioned migration so the safe pattern is repeatable across environments.",
+        "citations": ["Postgres docs: a constant column default added in v11+ does not rewrite existing rows."]
+      }
+    },
+    {
+      "id": "pg_add_col_const_pre11",
+      "engine": "postgres",
+      "operation": "add_column_constant_default",
+      "versionMax": 10,
+      "verdict": {
+        "severity": "danger",
+        "lockType": "ACCESS EXCLUSIVE",
+        "blocksReads": true,
+        "blocksWrites": true,
+        "rewritesTable": true,
+        "estDurationModel": "rewrite",
+        "explanation": "Before Postgres 11, adding a column with any default rewrites every row under an ACCESS EXCLUSIVE lock.",
+        "safeAlternative": {
+          "title": "Two-step migration",
+          "steps": ["ADD COLUMN with no default (instant)", "Backfill in batches", "Set default separately"],
+          "estLockLabel": "<100ms per step"
+        },
+        "caveats": [],
+        "redgateHook": "SQL Change Automation generates the batched, lock-safe version automatically.",
+        "citations": ["Postgres docs: pre-11 column defaults trigger a full table rewrite."]
+      }
+    },
+    {
+      "id": "pg_add_col_volatile",
+      "engine": "postgres",
+      "operation": "add_column_volatile_default",
+      "verdict": {
+        "severity": "danger",
+        "lockType": "ACCESS EXCLUSIVE",
+        "blocksReads": true,
+        "blocksWrites": true,
+        "rewritesTable": true,
+        "estDurationModel": "rewrite",
+        "explanation": "A volatile default forces Postgres to compute a value per row, rewriting the whole table under ACCESS EXCLUSIVE.",
+        "safeAlternative": {
+          "title": "Two-step migration",
+          "steps": ["ADD COLUMN with no default (instant)", "Backfill in batches", "Set default separately once backfilled"],
+          "estLockLabel": "<100ms per step"
+        },
+        "caveats": [],
+        "redgateHook": "SQL Change Automation generates the safe, batched version automatically in CI/CD.",
+        "citations": ["Postgres docs: volatile defaults require a table rewrite even on v11+."]
+      }
+    },
+    {
+      "id": "pg_create_index",
+      "engine": "postgres",
+      "operation": "create_index",
+      "verdict": {
+        "severity": "danger",
+        "lockType": "SHARE",
+        "blocksReads": false,
+        "blocksWrites": true,
+        "rewritesTable": false,
+        "estDurationModel": "index_build",
+        "explanation": "A plain CREATE INDEX takes a SHARE lock that blocks all writes for the duration of the build.",
+        "safeAlternative": {
+          "title": "CREATE INDEX CONCURRENTLY",
+          "steps": ["Use CREATE INDEX CONCURRENTLY", "Note: cannot run inside a transaction block", "Slower overall but does not block writes"],
+          "estLockLabel": "no write block"
+        },
+        "caveats": ["CONCURRENTLY can leave an invalid index if it fails; you must drop and retry."],
+        "redgateHook": "Flyway can wrap CONCURRENTLY index builds as standalone migrations outside transactions.",
+        "citations": ["Postgres docs: CREATE INDEX takes a write-blocking lock; CONCURRENTLY avoids it."]
+      }
+    },
+    {
+      "id": "mysql_add_col_instant_v8",
+      "engine": "mysql",
+      "operation": "add_column_nullable",
+      "versionMin": 8,
+      "verdict": {
+        "severity": "safe",
+        "lockType": "metadata-only",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "instant",
+        "explanation": "MySQL 8.0 INSTANT DDL adds an eligible column as a metadata-only change in milliseconds, regardless of table size.",
+        "safeAlternative": null,
+        "caveats": ["INSTANT only applies to eligible columns (e.g. added at the end of the row in older 8.0.x; relaxed in 8.0.29+). Verify eligibility."],
+        "redgateHook": "Flyway records the INSTANT migration so the same safe path runs in every environment.",
+        "citations": ["MySQL docs: ALGORITHM=INSTANT adds columns as a metadata change in 8.0+."]
+      }
+    },
+    {
+      "id": "mysql_modify_column",
+      "engine": "mysql",
+      "operation": "alter_column_type",
+      "verdict": {
+        "severity": "danger",
+        "lockType": "metadata + COPY",
+        "blocksReads": false,
+        "blocksWrites": true,
+        "rewritesTable": true,
+        "estDurationModel": "rewrite",
+        "explanation": "Changing a column type usually forces ALGORITHM=COPY, rebuilding the table and blocking writes.",
+        "safeAlternative": {
+          "title": "Online schema change tool",
+          "steps": ["Use gh-ost or pt-online-schema-change", "Builds a shadow table and swaps atomically", "Keeps writes flowing via triggers/binlog"],
+          "estLockLabel": "brief cutover lock only"
+        },
+        "caveats": ["INPLACE may be possible for some type changes; check the specific conversion."],
+        "redgateHook": "Redgate's migration tooling integrates these patterns into a tracked, reviewable change.",
+        "citations": ["MySQL docs: many MODIFY COLUMN operations require ALGORITHM=COPY."]
+      }
+    },
+    {
+      "id": "mssql_add_col_null",
+      "engine": "sqlserver",
+      "operation": "add_column_nullable",
+      "verdict": {
+        "severity": "safe",
+        "lockType": "metadata-only",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "instant",
+        "explanation": "Adding a NULLable column is a metadata-only change in SQL Server and completes near-instantly.",
+        "safeAlternative": null,
+        "caveats": [],
+        "redgateHook": "SQL Change Automation versions this so it deploys identically across dev, staging, prod.",
+        "citations": ["SQL Server docs: adding a nullable column is a metadata operation."]
+      }
+    },
+    {
+      "id": "mssql_create_index_online_ent",
+      "engine": "sqlserver",
+      "operation": "create_index",
+      "editionRequired": "enterprise",
+      "verdict": {
+        "severity": "caution",
+        "lockType": "Sch-M (brief)",
+        "blocksReads": false,
+        "blocksWrites": false,
+        "rewritesTable": false,
+        "estDurationModel": "index_build",
+        "explanation": "With ONLINE=ON (Enterprise edition), the index build avoids a long blocking lock; only a brief Sch-M lock at start and finish.",
+        "safeAlternative": null,
+        "caveats": ["ONLINE=ON is Enterprise-only. On Standard edition this option is unavailable and the build blocks."],
+        "redgateHook": "SQL Change Automation can enforce ONLINE=ON where the edition supports it.",
+        "citations": ["SQL Server docs: ONLINE=ON index operations require Enterprise edition."]
+      }
+    },
+    {
+      "id": "mssql_create_index_offline",
+      "engine": "sqlserver",
+      "operation": "create_index",
+      "verdict": {
+        "severity": "danger",
+        "lockType": "Sch-M",
+        "blocksReads": true,
+        "blocksWrites": true,
+        "rewritesTable": false,
+        "estDurationModel": "index_build",
+        "explanation": "An offline index build (Standard edition default) takes a Sch-M lock that blocks reads and writes for the whole build.",
+        "safeAlternative": {
+          "title": "Build during a maintenance window, or upgrade edition",
+          "steps": ["Schedule the build in an approved downtime window", "Or use ONLINE=ON if on Enterprise edition"],
+          "estLockLabel": "blocks for full build"
+        },
+        "caveats": ["This is the default on Standard edition — the ONLINE=ON trap catches many teams."],
+        "redgateHook": "Redgate flags edition-dependent operations before they reach production.",
+        "citations": ["SQL Server docs: offline index builds hold a Sch-M lock blocking access."]
+      }
+    }
+  ]
+}

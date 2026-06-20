@@ -1,0 +1,10 @@
+{
+  "name": "will-it-lock-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure, testable lock-verdict rules engine for schema migrations.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
