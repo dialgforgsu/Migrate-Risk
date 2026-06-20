@@ -86,9 +86,9 @@
 
     /* ---------------- option tables ---------------- */
     const ENGINES = [
+      { value: 'sqlserver', label: 'SQL Server' },
       { value: 'postgres', label: 'PostgreSQL' },
       { value: 'mysql', label: 'MySQL' },
-      { value: 'sqlserver', label: 'SQL Server' },
     ];
     const VERSIONS = {
       postgres: ['16', '15', '14', '13', '12', '11', '10', '9.6'],
@@ -315,9 +315,9 @@
       const { engine, error } = useEngine();
       const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
 
-      const [engineName, setEngineName] = useState('postgres');
-      const [version, setVersion] = useState('16');
-      const [operation, setOperation] = useState('add_column_volatile_default');
+      const [engineName, setEngineName] = useState('sqlserver');
+      const [version, setVersion] = useState('2022');
+      const [operation, setOperation] = useState('create_index');
       const [tableMillions, setTableMillions] = useState(50); // rows in millions
       const [writesPerSec, setWritesPerSec] = useState(2000);
       const [edition, setEdition] = useState('standard');
