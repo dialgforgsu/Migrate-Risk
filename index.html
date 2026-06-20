@@ -10,12 +10,15 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
+      darkMode: 'class',
       theme: {
         extend: {
           colors: {
-            brand: '#0066cc',
-            success: '#28a745',
-            warning: '#ffc107',
+            // Redgate brand: red + white
+            brand: '#D6000D',
+            brandDark: '#A60009',
+            success: '#1e7e34',
+            warning: '#d39e00',
             risk: '#dc3545',
             neutral: '#6c757d',
           },
@@ -25,6 +28,16 @@
         },
       },
     };
+  </script>
+  <!-- Apply saved theme before paint to avoid a flash -->
+  <script>
+    (function () {
+      try {
+        var s = localStorage.getItem('mre-theme');
+        var dark = s ? s === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (dark) document.documentElement.classList.add('dark');
+      } catch (e) {}
+    })();
   </script>
 
   <!-- React 18 + Babel (no build step) -->
@@ -42,6 +55,8 @@
   <style>
     html { scroll-behavior: smooth; }
     body { background: #f4f6f9; }
+    .dark body { background: #0b1220; }
+
     /* Range slider styling (cross-browser) */
     input[type="range"] {
       -webkit-appearance: none;
@@ -52,25 +67,29 @@
       background: #e2e8f0;
       outline: none;
     }
+    .dark input[type="range"] { background: #334155; }
     input[type="range"]::-webkit-slider-thumb {
       -webkit-appearance: none;
       appearance: none;
       width: 20px;
       height: 20px;
       border-radius: 9999px;
-      background: #0066cc;
+      background: #D6000D;
       cursor: pointer;
       border: 3px solid #fff;
       box-shadow: 0 1px 4px rgba(0,0,0,0.25);
       transition: transform .1s ease;
     }
+    .dark input[type="range"]::-webkit-slider-thumb { border-color: #1e293b; }
     input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
     input[type="range"]::-moz-range-thumb {
       width: 20px; height: 20px; border-radius: 9999px;
-      background: #0066cc; cursor: pointer; border: 3px solid #fff;
+      background: #D6000D; cursor: pointer; border: 3px solid #fff;
       box-shadow: 0 1px 4px rgba(0,0,0,0.25);
     }
-    input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 3px solid #99c2ec; }
+    .dark input[type="range"]::-moz-range-thumb { border-color: #1e293b; }
+    input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 3px solid rgba(214,0,13,.4); }
+
     .metric-pop { animation: pop .25s ease; }
     @keyframes pop { 0% { transform: scale(.96); } 60% { transform: scale(1.02); } 100% { transform: scale(1); } }
     .fade-in { animation: fade .3s ease; }
@@ -81,16 +100,15 @@
   <div id="root"></div>
 
   <script type="text/babel" data-presets="react">
-    const { useState, useEffect, useMemo, useCallback, useRef } = React;
+    const { useState, useEffect, useMemo, useCallback } = React;
     const {
       ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
-      Cell, ReferenceLine, Legend
+      Cell, ReferenceLine
     } = Recharts;
 
     /* ----------------------------------------------------------------
-       FORMULAS  (utils/formulas.js)
+       FORMULAS
     ---------------------------------------------------------------- */
-
     const THROUGHPUT = { online: 50, offline: 200, shadow: 150 }; // MB/s
 
     function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
@@ -102,38 +120,25 @@
         downtimeTolerance, migrationStrategy, targetDB, validateData,
       } = inputs;
 
-      // --- Preparation overhead: 5–15 min scaled by indexes + constraints ---
       const prepOverhead = clamp(5 + indexCount * 0.6 + columnCount * 0.05, 5, 15);
 
-      // --- Migration duration ---
-      // table_size (GB) -> MB ; throughput MB/s -> seconds -> minutes
       const throughput = THROUGHPUT[migrationStrategy] || 50;
       const transferMinutes = (tableSize * 1024) / throughput / 60;
       let migrationTime = transferMinutes + prepOverhead;
-
-      // PostgreSQL: slightly heavier index rebuild on large tables (DB-specific nuance)
       if (targetDB === 'postgres') migrationTime *= 1.08;
       migrationTime = round(migrationTime, 1);
 
-      // --- Data validation ---
       let dataValidationTime = validateData
         ? round(tableSize / 100 + columnCount * 2, 1)
         : 5;
 
-      // --- Downtime window ---
       let downtimeWindow;
-      if (migrationStrategy === 'offline') {
-        downtimeWindow = round(migrationTime + dataValidationTime + 10, 1);
-      } else if (migrationStrategy === 'online') {
-        downtimeWindow = 5;
-      } else {
-        downtimeWindow = 10; // shadow
-      }
+      if (migrationStrategy === 'offline') downtimeWindow = round(migrationTime + dataValidationTime + 10, 1);
+      else if (migrationStrategy === 'online') downtimeWindow = 5;
+      else downtimeWindow = 10;
 
-      // --- Prep time (in days) heuristic for risk scoring ---
       const daysPrepTime = clamp(1 + tableSize / 200 + indexCount / 10, 1, 10);
 
-      // --- Rollback risk (0–100, lower = better) ---
       let risk = 40;
       risk += (tableSize / 100) * 2;
       risk -= downtimeWindow * 0.5;
@@ -143,7 +148,6 @@
       if (migrationStrategy === 'online') risk -= 10;
       const rollbackRisk = clamp(round(risk), 0, 100);
 
-      // --- Team hours ---
       let hours = 4;
       hours += tableSize / 100;
       hours += dailyWrites / 5000;
@@ -153,7 +157,6 @@
       if (migrationStrategy === 'offline') hours *= 0.8;
       const teamHoursNeeded = round(hours, 1);
 
-      // --- Recommended strategy ---
       let recommendedStrategy, recommendedReason;
       if (tableSize > 100 && dailyWrites > 5000 && downtimeTolerance < 60) {
         recommendedStrategy = 'online';
@@ -166,104 +169,53 @@
         recommendedReason = 'A parallel shadow table balances speed and safety for your mix of size, load, and downtime tolerance.';
       }
 
-      // --- Warnings / constraints ---
       const warnings = [];
       if (downtimeWindow > downtimeTolerance) {
-        warnings.push({
-          type: 'error',
-          text: `Downtime window (${downtimeWindow} min) exceeds your tolerance (${downtimeTolerance} min) by ${round(downtimeWindow - downtimeTolerance, 1)} min.`,
-        });
+        warnings.push({ type: 'error', text: `Downtime window (${downtimeWindow} min) exceeds your tolerance (${downtimeTolerance} min) by ${round(downtimeWindow - downtimeTolerance, 1)} min.` });
       }
       if (dailyWrites > 5000 && migrationStrategy !== 'online') {
-        warnings.push({
-          type: 'warn',
-          text: `High write volume (${dailyWrites.toLocaleString()}/day) detected — an online migration is recommended to avoid a long lock.`,
-        });
+        warnings.push({ type: 'warn', text: `High write volume (${dailyWrites.toLocaleString()}/day) detected — an online migration is recommended to avoid a long lock.` });
       }
       if (migrationStrategy !== recommendedStrategy) {
-        warnings.push({
-          type: 'warn',
-          text: `Your selected strategy (${migrationStrategy}) differs from the recommended one (${recommendedStrategy}).`,
-        });
+        warnings.push({ type: 'warn', text: `Your selected strategy (${migrationStrategy}) differs from the recommended one (${recommendedStrategy}).` });
       }
       if (tableSize > 200 && migrationStrategy === 'offline') {
-        warnings.push({
-          type: 'warn',
-          text: `Offline migration on a ${tableSize} GB table means a long blocking window — consider shadow or online.`,
-        });
+        warnings.push({ type: 'warn', text: `Offline migration on a ${tableSize} GB table means a long blocking window — consider shadow or online.` });
       }
-      if (rollbackRisk <= 30) {
-        warnings.push({ type: 'ok', text: 'Low rollback risk — this migration is well-scoped.' });
-      } else if (rollbackRisk >= 71) {
-        warnings.push({ type: 'error', text: 'High rollback risk — add prep time, more downtime, or switch to a shadow strategy.' });
-      }
-      if (!validateData) {
-        warnings.push({ type: 'warn', text: 'Data validation is off — only a quick sanity check will run. Re-enable for production cutovers.' });
-      }
+      if (rollbackRisk <= 30) warnings.push({ type: 'ok', text: 'Low rollback risk — this migration is well-scoped.' });
+      else if (rollbackRisk >= 71) warnings.push({ type: 'error', text: 'High rollback risk — add prep time, more downtime, or switch to a shadow strategy.' });
+      if (!validateData) warnings.push({ type: 'warn', text: 'Data validation is off — only a quick sanity check will run. Re-enable for production cutovers.' });
 
       return {
-        estimatedDuration: migrationTime,
-        dataValidationTime,
-        downtimeWindow,
-        rollbackRisk,
-        teamHoursNeeded,
-        prepOverhead: round(prepOverhead, 1),
-        recommendedStrategy,
-        recommendedReason,
-        warnings,
+        estimatedDuration: migrationTime, dataValidationTime, downtimeWindow,
+        rollbackRisk, teamHoursNeeded, prepOverhead: round(prepOverhead, 1),
+        recommendedStrategy, recommendedReason, warnings,
       };
     }
 
     /* ----------------------------------------------------------------
-       PRESETS
+       PRESETS / DEFAULTS
     ---------------------------------------------------------------- */
     const PRESETS = {
-      'Small App DB': {
-        tableSize: 5, dailyReads: 5000, dailyWrites: 100, columnCount: 15,
-        indexCount: 3, downtimeTolerance: 60, migrationStrategy: 'offline',
-        targetDB: 'sqlserver', validateData: true,
-      },
-      'Medium E-Commerce': {
-        tableSize: 50, dailyReads: 100000, dailyWrites: 5000, columnCount: 25,
-        indexCount: 8, downtimeTolerance: 30, migrationStrategy: 'online',
-        targetDB: 'sqlserver', validateData: true,
-      },
-      'Enterprise Data Warehouse': {
-        tableSize: 500, dailyReads: 1000000, dailyWrites: 50000, columnCount: 80,
-        indexCount: 15, downtimeTolerance: 240, migrationStrategy: 'shadow',
-        targetDB: 'postgres', validateData: true,
-      },
-      'Microservices Migration': {
-        tableSize: 20, dailyReads: 50000, dailyWrites: 2000, columnCount: 12,
-        indexCount: 4, downtimeTolerance: 15, migrationStrategy: 'online',
-        targetDB: 'postgres', validateData: false,
-      },
+      'Small App DB': { tableSize: 5, dailyReads: 5000, dailyWrites: 100, columnCount: 15, indexCount: 3, downtimeTolerance: 60, migrationStrategy: 'offline', targetDB: 'sqlserver', validateData: true },
+      'Medium E-Commerce': { tableSize: 50, dailyReads: 100000, dailyWrites: 5000, columnCount: 25, indexCount: 8, downtimeTolerance: 30, migrationStrategy: 'online', targetDB: 'sqlserver', validateData: true },
+      'Enterprise Data Warehouse': { tableSize: 500, dailyReads: 1000000, dailyWrites: 50000, columnCount: 80, indexCount: 15, downtimeTolerance: 240, migrationStrategy: 'shadow', targetDB: 'postgres', validateData: true },
+      'Microservices Migration': { tableSize: 20, dailyReads: 50000, dailyWrites: 2000, columnCount: 12, indexCount: 4, downtimeTolerance: 15, migrationStrategy: 'online', targetDB: 'postgres', validateData: false },
     };
-
-    const DEFAULT_INPUTS = {
-      tableSize: 50, dailyReads: 10000, dailyWrites: 500, columnCount: 25,
-      indexCount: 5, downtimeTolerance: 120, migrationStrategy: 'online',
-      targetDB: 'sqlserver', validateData: true,
-    };
+    const DEFAULT_INPUTS = { tableSize: 50, dailyReads: 10000, dailyWrites: 500, columnCount: 25, indexCount: 5, downtimeTolerance: 120, migrationStrategy: 'online', targetDB: 'sqlserver', validateData: true };
 
     /* ----------------------------------------------------------------
-       URL STATE  (hash-encoded for share links)
+       URL STATE
     ---------------------------------------------------------------- */
     const KEY_ORDER = ['tableSize','dailyReads','dailyWrites','columnCount','indexCount','downtimeTolerance','migrationStrategy','targetDB','validateData'];
-
-    function encodeState(inputs) {
-      const p = new URLSearchParams();
-      KEY_ORDER.forEach((k) => p.set(k, String(inputs[k])));
-      return p.toString();
-    }
+    function encodeState(inputs) { const p = new URLSearchParams(); KEY_ORDER.forEach((k) => p.set(k, String(inputs[k]))); return p.toString(); }
     function decodeState() {
       try {
         const hash = window.location.hash.replace(/^#/, '');
         if (!hash) return null;
         const p = new URLSearchParams(hash);
         const out = { ...DEFAULT_INPUTS };
-        const numeric = ['tableSize','dailyReads','dailyWrites','columnCount','indexCount','downtimeTolerance'];
-        numeric.forEach((k) => { if (p.has(k)) out[k] = Number(p.get(k)); });
+        ['tableSize','dailyReads','dailyWrites','columnCount','indexCount','downtimeTolerance'].forEach((k) => { if (p.has(k)) out[k] = Number(p.get(k)); });
         if (p.has('migrationStrategy')) out.migrationStrategy = p.get('migrationStrategy');
         if (p.has('targetDB')) out.targetDB = p.get('targetDB');
         if (p.has('validateData')) out.validateData = p.get('validateData') === 'true';
@@ -272,7 +224,7 @@
     }
 
     /* ----------------------------------------------------------------
-       SMALL UI HELPERS
+       HELPERS
     ---------------------------------------------------------------- */
     function fmt(n) {
       if (n >= 1000000) return (n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1) + 'M';
@@ -281,94 +233,121 @@
     }
     function minutesPretty(m) {
       if (m < 60) return `${m} min`;
-      const h = Math.floor(m / 60);
-      const rem = round(m - h * 60);
+      const h = Math.floor(m / 60); const rem = round(m - h * 60);
       return rem ? `${h}h ${rem}m` : `${h}h`;
     }
     function riskColor(score) {
-      if (score <= 30) return { hex: '#28a745', label: 'Low', bg: 'bg-success/10', text: 'text-success', ring: 'ring-success/30' };
-      if (score <= 70) return { hex: '#d39e00', label: 'Moderate', bg: 'bg-warning/10', text: 'text-yellow-700', ring: 'ring-warning/40' };
-      return { hex: '#dc3545', label: 'High', bg: 'bg-risk/10', text: 'text-risk', ring: 'ring-risk/30' };
+      if (score <= 30) return { hex: '#1e7e34', label: 'Low', bg: 'bg-success/10 dark:bg-success/20', text: 'text-success dark:text-green-400' };
+      if (score <= 70) return { hex: '#d39e00', label: 'Moderate', bg: 'bg-warning/10 dark:bg-warning/20', text: 'text-yellow-700 dark:text-yellow-300' };
+      return { hex: '#dc3545', label: 'High', bg: 'bg-risk/10 dark:bg-risk/20', text: 'text-risk dark:text-red-400' };
     }
 
-    function Slider({ label, value, min, max, step = 1, onChange, format, suffix, hint }) {
+    /* ----------------------------------------------------------------
+       INFO TOOLTIP  (hover + keyboard focus, explains the "why")
+    ---------------------------------------------------------------- */
+    function InfoTip({ children, why, align = 'center' }) {
+      const pos = align === 'right' ? 'right-0' : align === 'left' ? 'left-0' : 'left-1/2 -translate-x-1/2';
+      return (
+        <span className="group relative inline-flex align-middle">
+          <button
+            type="button"
+            aria-label="More information"
+            className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-bold leading-none text-slate-400 transition-colors hover:border-brand hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 dark:border-slate-600 dark:text-slate-400 dark:hover:border-brand dark:hover:text-red-400"
+          >i</button>
+          <span
+            role="tooltip"
+            className={`pointer-events-none absolute bottom-full ${pos} z-50 mb-2 w-60 rounded-lg bg-slate-800 px-3 py-2.5 text-left text-xs font-normal leading-relaxed text-white opacity-0 shadow-xl ring-1 ring-black/5 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:bg-slate-700`}
+          >
+            {children}
+            {why && (
+              <span className="mt-1.5 block border-t border-white/15 pt-1.5">
+                <span className="font-semibold text-red-300">Why it matters: </span>{why}
+              </span>
+            )}
+          </span>
+        </span>
+      );
+    }
+
+    /* ----------------------------------------------------------------
+       INPUT CONTROLS
+    ---------------------------------------------------------------- */
+    function Slider({ label, value, min, max, step = 1, onChange, format, suffix, tip, why }) {
       const display = format ? format(value) : value;
       return (
         <div className="mb-5">
           <div className="flex items-baseline justify-between mb-1.5">
-            <label className="text-sm font-medium text-slate-700">{label}</label>
-            <span className="text-sm font-semibold text-brand tabular-nums">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
+              {label}{tip && <InfoTip why={why}>{tip}</InfoTip>}
+            </label>
+            <span className="text-sm font-semibold text-brand tabular-nums dark:text-red-400">
               {display}{suffix ? ` ${suffix}` : ''}
             </span>
           </div>
           <input
             type="range" min={min} max={max} step={step} value={value}
             onChange={(e) => onChange(Number(e.target.value))}
-            aria-label={label}
-            aria-valuetext={`${display}${suffix ? ' ' + suffix : ''}`}
+            aria-label={label} aria-valuetext={`${display}${suffix ? ' ' + suffix : ''}`}
           />
-          {hint && <p className="text-xs text-slate-400 mt-1">{hint}</p>}
         </div>
       );
     }
 
-    function Segmented({ label, value, options, onChange, name }) {
+    function Segmented({ label, value, options, onChange, tip, why, hint }) {
       return (
         <div className="mb-5">
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">{label}</label>
-          <div role="radiogroup" aria-label={label} className="grid gap-1.5 rounded-lg bg-slate-100 p-1"
+          <label className="block text-sm font-medium text-slate-700 mb-1.5 dark:text-slate-200">
+            {label}{tip && <InfoTip why={why}>{tip}</InfoTip>}
+          </label>
+          <div role="radiogroup" aria-label={label}
+               className="grid gap-1.5 rounded-lg bg-slate-100 p-1 dark:bg-slate-700/60"
                style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0,1fr))` }}>
             {options.map((opt) => {
               const active = value === opt.value;
               return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
+                <button key={opt.value} type="button" role="radio" aria-checked={active}
                   onClick={() => onChange(opt.value)}
                   className={`px-2 py-1.5 text-sm font-medium rounded-md transition-all ${
-                    active ? 'bg-white text-brand shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                >
+                    active ? 'bg-white text-brand shadow-sm dark:bg-slate-900 dark:text-red-400'
+                           : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}>
                   {opt.label}
                 </button>
               );
             })}
           </div>
+          {hint && <p className="text-xs text-slate-400 mt-1.5 dark:text-slate-500 fade-in">{hint}</p>}
         </div>
       );
     }
 
-    function Toggle({ label, checked, onChange, hint }) {
+    function Toggle({ label, checked, onChange, tip, why }) {
       return (
-        <div className="mb-5 flex items-start justify-between">
-          <div>
-            <label className="text-sm font-medium text-slate-700">{label}</label>
-            {hint && <p className="text-xs text-slate-400 mt-0.5">{hint}</p>}
-          </div>
-          <button
-            type="button" role="switch" aria-checked={checked} aria-label={label}
+        <div className="mb-1 flex items-start justify-between">
+          <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
+            {label}{tip && <InfoTip why={why}>{tip}</InfoTip>}
+          </label>
+          <button type="button" role="switch" aria-checked={checked} aria-label={label}
             onClick={() => onChange(!checked)}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors ${checked ? 'bg-brand' : 'bg-slate-300'}`}
-          >
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors ${checked ? 'bg-brand' : 'bg-slate-300 dark:bg-slate-600'}`}>
             <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow translate-y-0.5 transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
         </div>
       );
     }
 
-    function MetricCard({ label, value, unit, sub, accent }) {
-      // re-trigger pop animation on value change
+    function MetricCard({ label, value, unit, sub, accent, tip, why, align }) {
       const [k, setK] = useState(0);
       useEffect(() => { setK((x) => x + 1); }, [value]);
       return (
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</p>
-          <p key={k} className={`metric-pop mt-1 text-2xl font-extrabold tabular-nums ${accent || 'text-slate-800'}`}>
-            {value}{unit && <span className="ml-1 text-sm font-semibold text-slate-400">{unit}</span>}
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+          <p className="flex items-center text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+            {label}{tip && <InfoTip why={why} align={align}>{tip}</InfoTip>}
           </p>
-          {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
+          <p key={k} className={`metric-pop mt-1 text-2xl font-extrabold tabular-nums ${accent || 'text-slate-800 dark:text-slate-100'}`}>
+            {value}{unit && <span className="ml-1 text-sm font-semibold text-slate-400 dark:text-slate-500">{unit}</span>}
+          </p>
+          {sub && <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">{sub}</p>}
         </div>
       );
     }
@@ -376,21 +355,17 @@
     /* ----------------------------------------------------------------
        RISK GAUGE
     ---------------------------------------------------------------- */
-    function RiskGauge({ score }) {
+    function RiskGauge({ score, dark }) {
       const c = riskColor(score);
-      const radius = 70, stroke = 14;
-      const circ = Math.PI * radius; // half circle
-      const pct = clamp(score, 0, 100) / 100;
-      const dash = circ * pct;
+      const radius = 70;
+      const circ = Math.PI * radius;
+      const dash = circ * (clamp(score, 0, 100) / 100);
       return (
         <div className="flex flex-col items-center">
           <svg width="180" height="110" viewBox="0 0 180 110" role="img" aria-label={`Rollback risk score ${score} of 100, ${c.label}`}>
-            <path d="M 20 100 A 70 70 0 0 1 160 100" fill="none" stroke="#e2e8f0" strokeWidth={stroke} strokeLinecap="round" />
-            <path
-              d="M 20 100 A 70 70 0 0 1 160 100" fill="none" stroke={c.hex} strokeWidth={stroke} strokeLinecap="round"
-              strokeDasharray={`${dash} ${circ}`}
-              style={{ transition: 'stroke-dasharray .5s ease, stroke .3s ease' }}
-            />
+            <path d="M 20 100 A 70 70 0 0 1 160 100" fill="none" stroke={dark ? '#334155' : '#e2e8f0'} strokeWidth="14" strokeLinecap="round" />
+            <path d="M 20 100 A 70 70 0 0 1 160 100" fill="none" stroke={c.hex} strokeWidth="14" strokeLinecap="round"
+              strokeDasharray={`${dash} ${circ}`} style={{ transition: 'stroke-dasharray .5s ease, stroke .3s ease' }} />
           </svg>
           <div className="-mt-12 text-center">
             <div className="text-3xl font-extrabold tabular-nums" style={{ color: c.hex }}>{score}</div>
@@ -401,50 +376,53 @@
     }
 
     /* ----------------------------------------------------------------
-       MAIN APP
+       STRATEGY EXPLANATIONS (shown as a live hint + tooltip)
+    ---------------------------------------------------------------- */
+    const STRATEGY_INFO = {
+      online: 'Online — migrates while the database stays live (~50 MB/s). Slower throughput, but only a brief cutover is offline.',
+      offline: 'Offline — locks the table and copies fast (~200 MB/s), but the table is unavailable the whole time.',
+      shadow: 'Shadow — builds a parallel copy and syncs it (~150 MB/s), then swaps. Balanced speed with the lowest rollback risk.',
+    };
+
+    /* ----------------------------------------------------------------
+       APP
     ---------------------------------------------------------------- */
     function App() {
       const [inputs, setInputs] = useState(() => decodeState() || DEFAULT_INPUTS);
       const [activePreset, setActivePreset] = useState(null);
       const [copied, setCopied] = useState('');
+      const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
 
       const results = useMemo(() => computeResults(inputs), [inputs]);
 
-      // keep URL hash in sync (debounced via rAF-ish microtask)
       useEffect(() => {
-        const id = setTimeout(() => {
-          const enc = encodeState(inputs);
-          window.history.replaceState(null, '', '#' + enc);
-        }, 200);
+        const id = setTimeout(() => window.history.replaceState(null, '', '#' + encodeState(inputs)), 200);
         return () => clearTimeout(id);
       }, [inputs]);
+
+      const toggleTheme = useCallback(() => {
+        setDark((d) => {
+          const next = !d;
+          document.documentElement.classList.toggle('dark', next);
+          try { localStorage.setItem('mre-theme', next ? 'dark' : 'light'); } catch (e) {}
+          return next;
+        });
+      }, []);
 
       const set = useCallback((key, value) => {
         setInputs((prev) => ({ ...prev, [key]: value }));
         setActivePreset(null);
       }, []);
+      const applyPreset = useCallback((name) => { setInputs({ ...DEFAULT_INPUTS, ...PRESETS[name] }); setActivePreset(name); }, []);
+      const reset = useCallback(() => { setInputs(DEFAULT_INPUTS); setActivePreset(null); }, []);
 
-      const applyPreset = useCallback((name) => {
-        setInputs({ ...DEFAULT_INPUTS, ...PRESETS[name] });
-        setActivePreset(name);
-      }, []);
-
-      const reset = useCallback(() => {
-        setInputs(DEFAULT_INPUTS);
-        setActivePreset(null);
-      }, []);
-
-      // ---- share helpers ----
       const flashCopied = (which) => { setCopied(which); setTimeout(() => setCopied(''), 1800); };
-
       const copyLink = async () => {
         const url = window.location.origin + window.location.pathname + '#' + encodeState(inputs);
         try { await navigator.clipboard.writeText(url); } catch (e) {}
         flashCopied('link');
       };
-
       const shareText = `I estimated a ${inputs.migrationStrategy} migration for a ${inputs.tableSize} GB table: ~${minutesPretty(results.estimatedDuration)} duration, ${results.downtimeWindow} min downtime, ${riskColor(results.rollbackRisk).label.toLowerCase()} rollback risk (${results.rollbackRisk}/100).`;
-
       const noteText =
 `MIGRATION ESTIMATE
 ==================================
@@ -467,22 +445,19 @@ Recommended:      ${results.recommendedStrategy}
 Reason:           ${results.recommendedReason}
 ==================================
 Estimated with the Redgate Migration Risk & Duration Estimator.`;
+      const copyText = async (text, which) => { try { await navigator.clipboard.writeText(text); } catch (e) {} flashCopied(which); };
 
-      const copyText = async (text, which) => {
-        try { await navigator.clipboard.writeText(text); } catch (e) {}
-        flashCopied(which);
-      };
-
-      // ---- chart data ----
       const chartData = useMemo(() => ([
         { name: 'Prep', minutes: results.prepOverhead, fill: '#6c757d' },
-        { name: 'Migration', minutes: round(results.estimatedDuration - results.prepOverhead, 1), fill: '#0066cc' },
-        { name: 'Validation', minutes: results.dataValidationTime, fill: '#17a2b8' },
+        { name: 'Migration', minutes: round(results.estimatedDuration - results.prepOverhead, 1), fill: '#D6000D' },
+        { name: 'Validation', minutes: results.dataValidationTime, fill: '#0aa2c0' },
         { name: 'Downtime', minutes: results.downtimeWindow, fill: riskColor(results.rollbackRisk).hex },
       ]), [results]);
 
       const overTolerance = results.downtimeWindow > inputs.downtimeTolerance;
       const rc = riskColor(results.rollbackRisk);
+      const axisColor = dark ? '#94a3b8' : '#64748b';
+      const gridColor = dark ? '#1e293b' : '#eef2f7';
 
       const strategyOptions = [
         { value: 'online', label: 'Online' },
@@ -491,38 +466,42 @@ Estimated with the Redgate Migration Risk & Duration Estimator.`;
       ];
 
       return (
-        <div className="min-h-screen">
+        <div className="min-h-screen bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100">
           {/* Header */}
-          <header className="bg-white border-b border-slate-200">
+          <header className="bg-white border-b border-slate-200 dark:bg-slate-800 dark:border-slate-700">
             <div className="mx-auto max-w-6xl px-4 sm:px-6 py-5 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand text-white font-extrabold text-lg">M</div>
                 <div>
-                  <h1 className="text-lg sm:text-xl font-extrabold text-slate-800 leading-tight">Migration Risk &amp; Duration Estimator</h1>
-                  <p className="text-xs text-slate-500">Plan SQL Server &amp; PostgreSQL migrations with confidence — not guesswork.</p>
+                  <h1 className="text-lg sm:text-xl font-extrabold leading-tight">Migration Risk &amp; Duration Estimator</h1>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Plan SQL Server &amp; PostgreSQL migrations with confidence — not guesswork.</p>
                 </div>
               </div>
-              <button onClick={reset} className="text-sm font-medium text-slate-500 hover:text-brand transition-colors">
-                Reset
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={toggleTheme} aria-label="Toggle dark mode" title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition-colors hover:border-brand hover:text-brand dark:border-slate-600 dark:text-slate-300 dark:hover:text-red-400">
+                  {dark ? '☀' : '🌙'}
+                </button>
+                <button onClick={reset} className="text-sm font-medium text-slate-500 hover:text-brand transition-colors dark:text-slate-400 dark:hover:text-red-400">Reset</button>
+              </div>
             </div>
           </header>
 
           <main className="mx-auto max-w-6xl px-4 sm:px-6 py-6">
             {/* Presets */}
             <section className="mb-6">
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Quick scenarios</h2>
+              <h2 className="flex items-center text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2 dark:text-slate-500">
+                Quick scenarios
+                <InfoTip align="left" why="Presets are realistic starting points so you can demo a scenario in seconds, then fine-tune the sliders.">One-click profiles that load a typical table size, load, and strategy.</InfoTip>
+              </h2>
               <div className="flex flex-wrap gap-2">
                 {Object.keys(PRESETS).map((name) => (
-                  <button
-                    key={name}
-                    onClick={() => applyPreset(name)}
+                  <button key={name} onClick={() => applyPreset(name)}
                     className={`rounded-full border px-3.5 py-1.5 text-sm font-medium transition-all ${
                       activePreset === name
                         ? 'border-brand bg-brand text-white shadow-sm'
-                        : 'border-slate-200 bg-white text-slate-600 hover:border-brand hover:text-brand'
-                    }`}
-                  >
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-brand hover:text-brand dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-brand dark:hover:text-red-400'
+                    }`}>
                     {name}
                   </button>
                 ))}
@@ -530,58 +509,85 @@ Estimated with the Redgate Migration Risk & Duration Estimator.`;
             </section>
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
-              {/* ---------------- INPUTS ---------------- */}
-              <section className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 shadow-sm h-fit">
-                <h2 className="mb-4 text-base font-bold text-slate-800">Migration parameters</h2>
+              {/* INPUTS */}
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 shadow-sm h-fit dark:border-slate-700 dark:bg-slate-800">
+                <h2 className="mb-4 text-base font-bold">Migration parameters</h2>
 
                 <Slider label="Table size" value={inputs.tableSize} min={0} max={500} step={1}
                   onChange={(v) => set('tableSize', v)} suffix="GB"
-                  hint="Total data volume to migrate." />
+                  tip="The total volume of data to migrate, in gigabytes."
+                  why="Transfer time scales directly with size, and bigger tables raise rollback risk because more data must be re-synced if you abort mid-migration." />
 
                 <Slider label="Daily reads" value={inputs.dailyReads} min={0} max={1000000} step={1000}
-                  onChange={(v) => set('dailyReads', v)} format={fmt} suffix="/day" />
+                  onChange={(v) => set('dailyReads', v)} format={fmt} suffix="/day"
+                  tip="How many read queries hit this table per day."
+                  why="Read load rarely blocks a migration, but it signals how business-critical the table is — which informs how much downtime you can really afford." />
 
                 <Slider label="Daily writes" value={inputs.dailyWrites} min={0} max={100000} step={100}
                   onChange={(v) => set('dailyWrites', v)} format={fmt} suffix="/day"
-                  hint="Higher write load increases rollback risk." />
+                  tip="How many inserts/updates/deletes hit this table per day."
+                  why="Every write during a migration must be captured and replayed onto the target. Heavy write load increases rollback risk and pushes you toward an online strategy." />
 
                 <Slider label="Column count" value={inputs.columnCount} min={1} max={100} step={1}
-                  onChange={(v) => set('columnCount', v)} />
+                  onChange={(v) => set('columnCount', v)}
+                  tip="Number of columns in the table schema."
+                  why="Each column adds schema-mapping and validation work, which lengthens validation time and the team hours needed to verify the cutover." />
 
                 <Slider label="Index count" value={inputs.indexCount} min={1} max={20} step={1}
                   onChange={(v) => set('indexCount', v)}
-                  hint="More indexes = longer prep/rebuild." />
+                  tip="Number of indexes defined on the table."
+                  why="Indexes must be rebuilt on the target before the table is usable. More indexes mean longer preparation overhead added to the migration." />
 
                 <Slider label="Downtime tolerance" value={inputs.downtimeTolerance} min={0} max={480} step={5}
-                  onChange={(v) => set('downtimeTolerance', v)} format={minutesPretty} />
+                  onChange={(v) => set('downtimeTolerance', v)} format={minutesPretty}
+                  tip="The maximum time this table can be offline during cutover."
+                  why="If the estimated downtime window exceeds this budget, the plan isn't viable — the tool flags it and steers you to a less disruptive strategy." />
 
                 <Segmented label="Migration strategy" value={inputs.migrationStrategy}
-                  options={strategyOptions} onChange={(v) => set('migrationStrategy', v)} />
+                  options={strategyOptions} onChange={(v) => set('migrationStrategy', v)}
+                  hint={STRATEGY_INFO[inputs.migrationStrategy]}
+                  tip="How the data is moved — the single biggest lever on speed, downtime, and risk."
+                  why="Offline is fastest but fully blocking; online keeps the table live with minimal downtime; shadow runs a parallel copy for the best safety/speed balance." />
 
                 <Segmented label="Target database" value={inputs.targetDB}
                   options={[{ value: 'sqlserver', label: 'SQL Server' }, { value: 'postgres', label: 'PostgreSQL' }]}
-                  onChange={(v) => set('targetDB', v)} />
+                  onChange={(v) => set('targetDB', v)}
+                  tip="The destination database engine."
+                  why="Engines differ in how they rebuild indexes and constraints — PostgreSQL index builds run a touch heavier on large tables, nudging the duration estimate up." />
 
                 <Toggle label="Validate data after migration" checked={inputs.validateData}
                   onChange={(v) => set('validateData', v)}
-                  hint="Row counts, checksums & schema parity checks." />
+                  tip="Run row-count, checksum, and schema-parity checks once the data is moved."
+                  why="Validation catches silent data loss before you cut over. Turning it off saves time but is risky for production — only skip it for throwaway or test migrations." />
               </section>
 
-              {/* ---------------- RESULTS ---------------- */}
+              {/* RESULTS */}
               <section className="space-y-5">
-                {/* Metric cards */}
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   <MetricCard label="Migration time" value={results.estimatedDuration} unit="min"
-                    sub={minutesPretty(results.estimatedDuration)} accent="text-brand" />
-                  <MetricCard label="Validation" value={results.dataValidationTime} unit="min" />
-                  <MetricCard label="Downtime window" value={results.downtimeWindow} unit="min"
-                    accent={overTolerance ? 'text-risk' : 'text-slate-800'}
-                    sub={overTolerance ? 'over tolerance' : 'within budget'} />
-                  <MetricCard label="Team hours" value={results.teamHoursNeeded} unit="h" />
-                  <MetricCard label="Prep overhead" value={results.prepOverhead} unit="min" />
-                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex items-center justify-center">
+                    sub={minutesPretty(results.estimatedDuration)} accent="text-brand dark:text-red-400"
+                    tip="Time to move the data plus preparation overhead."
+                    why="Calculated as (table size ÷ strategy throughput) + prep. Faster strategies move more MB/s, so this drops as you switch from online to shadow to offline." />
+                  <MetricCard label="Validation" value={results.dataValidationTime} unit="min"
+                    tip="Time to verify the migrated data is correct."
+                    why="With validation on, it scales with table size and column count. With it off, it's a flat 5-minute sanity check — faster, but far less safe." />
+                  <MetricCard label="Downtime window" value={results.downtimeWindow} unit="min" align="right"
+                    accent={overTolerance ? 'text-risk dark:text-red-400' : 'text-slate-800 dark:text-slate-100'}
+                    sub={overTolerance ? 'over tolerance' : 'within budget'}
+                    tip="How long the table is actually unavailable to users."
+                    why="Offline = full migration + validation + a rollback buffer; online = a brief ~5 min cutover; shadow = ~10 min sync and swap. This is the number to compare against your tolerance." />
+                  <MetricCard label="Team hours" value={results.teamHoursNeeded} unit="h"
+                    tip="Estimated engineer effort to plan, run, and monitor the migration."
+                    why="Grows with table size, write load, and column count. Validation adds 50%, and online migrations add monitoring overhead because they run against live traffic." />
+                  <MetricCard label="Prep overhead" value={results.prepOverhead} unit="min"
+                    tip="Pre-migration setup: rebuilding indexes, constraints, and checks."
+                    why="Scales with index and column count (capped at 5–15 min). It's added on top of raw data-transfer time, so index-heavy tables take longer to go live." />
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex items-center justify-center dark:border-slate-700 dark:bg-slate-800">
                     <div className="text-center">
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-1">Rollback risk</p>
+                      <p className="flex items-center justify-center text-xs font-medium uppercase tracking-wide text-slate-400 mb-1 dark:text-slate-500">
+                        Rollback risk
+                        <InfoTip align="right" why="Lower is better. Bigger and write-heavier tables push it up; more allowed downtime, more prep time, and shadow/online strategies pull it down. Use it to justify a strategy choice to stakeholders.">A 0–100 score for how likely you are to abort and revert the migration.</InfoTip>
+                      </p>
                       <span className={`inline-block rounded-full px-3 py-1 text-lg font-extrabold tabular-nums ${rc.bg} ${rc.text}`}>
                         {results.rollbackRisk}<span className="text-xs font-semibold">/100</span>
                       </span>
@@ -590,31 +596,31 @@ Estimated with the Redgate Migration Risk & Duration Estimator.`;
                 </div>
 
                 {/* Recommendation */}
-                <div className="rounded-2xl border border-brand/20 bg-brand/5 p-5 fade-in">
+                <div className="rounded-2xl border border-brand/20 bg-brand/5 p-5 fade-in dark:border-brand/40 dark:bg-brand/10">
                   <div className="flex items-start gap-3">
                     <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-brand text-white text-sm font-bold">★</div>
                     <div>
-                      <p className="text-sm font-bold text-slate-800">
-                        Recommended strategy: <span className="capitalize text-brand">{results.recommendedStrategy}</span>
+                      <p className="flex items-center text-sm font-bold">
+                        Recommended strategy: <span className="ml-1 capitalize text-brand dark:text-red-400">{results.recommendedStrategy}</span>
+                        <InfoTip why="The recommendation is derived purely from your inputs (size, write load, downtime budget) — so you can defend it with numbers, not gut feel.">Suggested based on your table size, write load, and downtime tolerance.</InfoTip>
                       </p>
-                      <p className="mt-1 text-sm text-slate-600">{results.recommendedReason}</p>
+                      <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{results.recommendedReason}</p>
                     </div>
                   </div>
                 </div>
 
                 {/* Gauge + Chart */}
-                <div className="grid gap-4 sm:grid-cols-[auto_1fr] items-center rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <RiskGauge score={results.rollbackRisk} />
+                <div className="grid gap-4 sm:grid-cols-[auto_1fr] items-center rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                  <RiskGauge score={results.rollbackRisk} dark={dark} />
                   <div className="h-48 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={chartData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eef2f7" />
-                        <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={36}
-                          label={{ value: 'min', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#94a3b8' }} />
-                        <Tooltip
-                          formatter={(v) => [`${v} min`, 'Duration']}
-                          contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }} />
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
+                        <XAxis dataKey="name" tick={{ fontSize: 11, fill: axisColor }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 11, fill: axisColor }} axisLine={false} tickLine={false} width={36}
+                          label={{ value: 'min', angle: -90, position: 'insideLeft', fontSize: 10, fill: axisColor }} />
+                        <Tooltip formatter={(v) => [`${v} min`, 'Duration']}
+                          contentStyle={{ borderRadius: 8, border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, background: dark ? '#1e293b' : '#fff', color: dark ? '#e2e8f0' : '#1e293b', fontSize: 12 }} />
                         <ReferenceLine y={inputs.downtimeTolerance} stroke="#dc3545" strokeDasharray="4 4"
                           label={{ value: 'tolerance', position: 'right', fontSize: 10, fill: '#dc3545' }} />
                         <Bar dataKey="minutes" radius={[5, 5, 0, 0]}>
@@ -630,15 +636,14 @@ Estimated with the Redgate Migration Risk & Duration Estimator.`;
                   <div className="space-y-2">
                     {results.warnings.map((w, i) => {
                       const styles = {
-                        error: 'border-risk/30 bg-risk/5 text-risk',
-                        warn: 'border-warning/40 bg-warning/10 text-yellow-700',
-                        ok: 'border-success/30 bg-success/10 text-success',
+                        error: 'border-risk/30 bg-risk/5 text-risk dark:border-risk/40 dark:bg-risk/15 dark:text-red-300',
+                        warn: 'border-warning/40 bg-warning/10 text-yellow-700 dark:border-warning/40 dark:bg-warning/15 dark:text-yellow-300',
+                        ok: 'border-success/30 bg-success/10 text-success dark:border-success/40 dark:bg-success/15 dark:text-green-300',
                       }[w.type];
                       const icon = { error: '⚠️', warn: '⚠️', ok: '✅' }[w.type];
                       return (
                         <div key={i} className={`flex items-start gap-2 rounded-lg border px-3.5 py-2.5 text-sm font-medium ${styles}`}>
-                          <span aria-hidden="true">{icon}</span>
-                          <span>{w.text}</span>
+                          <span aria-hidden="true">{icon}</span><span>{w.text}</span>
                         </div>
                       );
                     })}
@@ -646,28 +651,28 @@ Estimated with the Redgate Migration Risk & Duration Estimator.`;
                 )}
 
                 {/* Share */}
-                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h3 className="mb-3 text-sm font-bold text-slate-800">Share this estimate</h3>
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                  <h3 className="mb-3 flex items-center text-sm font-bold">
+                    Share this estimate
+                    <InfoTip why="The link encodes every input in the URL, so a colleague who opens it sees the exact same scenario — perfect for sales follow-ups.">Copy a shareable link or a ready-to-paste summary for Slack, Teams, or email.</InfoTip>
+                  </h3>
                   <div className="flex flex-wrap gap-2">
-                    <button onClick={copyLink}
-                      className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand/90 transition-colors">
+                    <button onClick={copyLink} className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brandDark">
                       {copied === 'link' ? '✓ Link copied' : 'Copy share link'}
                     </button>
-                    <button onClick={() => copyText(shareText, 'text')}
-                      className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-brand hover:text-brand transition-colors">
+                    <button onClick={() => copyText(shareText, 'text')} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition-colors hover:border-brand hover:text-brand dark:border-slate-600 dark:text-slate-300 dark:hover:text-red-400">
                       {copied === 'text' ? '✓ Copied' : 'Copy summary'}
                     </button>
-                    <button onClick={() => copyText(noteText, 'note')}
-                      className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-brand hover:text-brand transition-colors">
+                    <button onClick={() => copyText(noteText, 'note')} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition-colors hover:border-brand hover:text-brand dark:border-slate-600 dark:text-slate-300 dark:hover:text-red-400">
                       {copied === 'note' ? '✓ Copied' : 'Export as note'}
                     </button>
                   </div>
-                  <p className="mt-3 text-xs text-slate-400 leading-relaxed">{shareText}</p>
+                  <p className="mt-3 text-xs text-slate-400 leading-relaxed dark:text-slate-500">{shareText}</p>
                 </div>
               </section>
             </div>
 
-            <footer className="mt-10 border-t border-slate-200 pt-5 text-center text-xs text-slate-400">
+            <footer className="mt-10 border-t border-slate-200 pt-5 text-center text-xs text-slate-400 dark:border-slate-700 dark:text-slate-500">
               Estimates are conservative planning figures, not guarantees. All calculations run locally in your browser — nothing is sent to a server.
             </footer>
           </main>
