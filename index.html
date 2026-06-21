@@ -269,6 +269,7 @@
       const [msgs, setMsgs] = useState([{ id: 0, role: 'assistant', text: introText }]);
       const [busy, setBusy]   = useState(false);
       const scrollRef = useRef(null);
+      const atMenu = msgs.length === 1;
 
       useEffect(() => {
         const el = scrollRef.current;
@@ -286,6 +287,11 @@
         }, 280);
       }
 
+      function backToMenu() {
+        if (busy) return;
+        setMsgs([{ id: Date.now(), role: 'assistant', text: introText }]);
+      }
+
       return (
         <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-2xl overflow-hidden">
 
@@ -293,11 +299,6 @@
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shrink-0">
             <span className="text-sm font-bold text-slate-800 dark:text-slate-100">💬 Migration Advisor</span>
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => setMsgs([{ id: Date.now(), role: 'assistant', text: introText }])}
-                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
-                Reset
-              </button>
               <button onClick={onClose} aria-label="Close advisor"
                 className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors p-0.5">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -364,13 +365,22 @@
               </button>
             ))}
 
-            <a href="https://buymeacoffee.com/gsupaek" target="_blank" rel="noopener noreferrer"
-              className="flex items-center justify-center gap-2 w-full rounded-xl border border-yellow-300 bg-yellow-50
-                dark:border-yellow-700 dark:bg-yellow-900/20
-                px-3 py-2 text-xs font-semibold text-yellow-700 dark:text-yellow-400
-                hover:bg-yellow-100 dark:hover:bg-yellow-900/40 transition-colors">
-              ☕ Buy me a coffee
-            </a>
+            {atMenu ? (
+              <a href="https://buymeacoffee.com/gsupaek" target="_blank" rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 w-full rounded-xl border border-yellow-300 bg-yellow-50
+                  dark:border-yellow-700 dark:bg-yellow-900/20
+                  px-3 py-2 text-xs font-semibold text-yellow-700 dark:text-yellow-400
+                  hover:bg-yellow-100 dark:hover:bg-yellow-900/40 transition-colors">
+                ☕ Buy me a coffee
+              </a>
+            ) : (
+              <button disabled={busy} onClick={backToMenu}
+                className="w-full text-left rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2 text-xs font-medium text-slate-500 dark:text-slate-400
+                  hover:border-slate-400 hover:text-slate-700 dark:hover:border-slate-500 dark:hover:text-slate-200
+                  disabled:opacity-40 transition-colors">
+                ← Back to main menu
+              </button>
+            )}
           </div>
         </div>
       );
@@ -707,7 +717,7 @@ ${verdict.explanation}` +
                 {/* visitor counter */}
                 <p className="text-xs text-slate-400 dark:text-slate-500">
                   {visitCount != null
-                    ? <span>👁 <strong className="text-slate-500 dark:text-slate-400">{visitCount.toLocaleString()}</strong> migrations checked here</span>
+                    ? <span>👁 <strong className="text-slate-500 dark:text-slate-400">{visitCount.toLocaleString()}</strong> visitors</span>
                     : <span className="invisible">—</span>}
                 </p>
                 {/* buy me a coffee */}
