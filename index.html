@@ -31,6 +31,9 @@
   <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
 
+  <!-- Supabase JS (visitor counter) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 
@@ -49,14 +52,13 @@
     @keyframes fade { from { opacity: 0; transform: translateY(4px);} to { opacity: 1; transform: translateY(0);} }
     .pop { animation: pop .25s ease; }
     @keyframes pop { 0% { transform: scale(.98);} 60% { transform: scale(1.01);} 100% { transform: scale(1);} }
+    .chat-msgs { scroll-behavior: smooth; }
   </style>
 </head>
 <body>
   <div id="root"></div>
 
-  <!-- ENGINE LOADER: pure modules + rules.json are the single source of truth.
-       Loaded natively (relative imports resolve against the document) so the
-       verdict logic never lives inside the React/JSX layer. -->
+  <!-- ENGINE LOADER: pure modules + rules.json loaded natively. -->
   <script type="module">
     (async () => {
       try {
@@ -79,10 +81,23 @@
         window.dispatchEvent(new CustomEvent('engine:error'));
       }
     })();
+
+    // Visitor counter — fire and forget, non-critical
+    (async () => {
+      try {
+        const sb = window.supabase.createClient(
+          'https://zezigpysakremuredzwj.supabase.co',
+          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InplemlncHlzYWtyZW11cmVkendqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NjkxMzAsImV4cCI6MjA5MzE0NTEzMH0.iH6DMmKH5e28TpnIezvyqn06m7LPyJGmB3bZLHi6Z0s'
+        );
+        const { data } = await sb.rpc('increment_visit_count', { p_slug: 'will-it-lock' });
+        window.VisitCount = data;
+        window.dispatchEvent(new CustomEvent('visits:ready'));
+      } catch (_) { /* non-critical — visitor count is cosmetic */ }
+    })();
   </script>
 
   <script type="text/babel" data-presets="react">
-    const { useState, useEffect, useMemo, useCallback } = React;
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     /* ---------------- option tables ---------------- */
     const ENGINES = [
@@ -125,6 +140,240 @@
     function fmtNum(n) {
       if (n >= 1000) return (n / 1000).toFixed(n % 1000 ? 1 : 0) + 'k';
       return String(n);
+    }
+
+    /* ---------------- chat generators ---------------- */
+    const LOCK_DESCS = {
+      'ACCESS EXCLUSIVE':
+        'the strongest PostgreSQL lock — blocks everything, including plain SELECT, for the full duration of the operation',
+      'ACCESS EXCLUSIVE (brief)':
+        'the strongest PostgreSQL lock, but released the instant a catalog entry is written — the blocking window is milliseconds, never scaled by table size',
+      'SHARE':
+        'allows concurrent reads (SELECT) but blocks all writes (INSERT / UPDATE / DELETE) for the full duration of the index build',
+      'SHARE ROW EXCLUSIVE':
+        'allows SELECT but blocks all writes and other data-modification operations for the duration of the scan',
+      'SHARE UPDATE EXCLUSIVE':
+        'the lightest ALTER TABLE lock in PostgreSQL — only blocks other schema-change DDL, never DML reads or writes',
+      'Sch-M':
+        'a Schema Modification lock in SQL Server that blocks all access — reads and writes — until the operation completes',
+      'Sch-M (brief)':
+        'a Schema Modification lock in SQL Server, released the instant the catalog update finishes — typically under 100 ms regardless of table size',
+      'S (shared)':
+        'a Shared lock in SQL Server — other queries can read and write DML while the index builds; only DDL (schema changes) is blocked',
+      'metadata-only':
+        'no row-level lock at all — the change touches only the system catalog and completes near-instantly regardless of table size',
+      'metadata + INPLACE rebuild':
+        'InnoDB rebuilds the table in the background while reads and writes continue; brief metadata locks bookend the start and finish only',
+      'metadata + COPY':
+        'MySQL must copy the entire table; reads continue on the original copy but writes queue until the new copy is swapped in',
+      'INPLACE, LOCK=NONE':
+        'MySQL builds the index in-place with no DML lock — reads and writes continue throughout; only brief metadata locks bookend the operation',
+    };
+
+    function genLockExplanation(verdict, opLabel, engLabel, version) {
+      const desc = LOCK_DESCS[verdict.lockType] || `a ${verdict.lockType} lock`;
+      let t = `**Why "${verdict.lockType}"?**\n\n`;
+      t += `${verdict.explanation}\n\n`;
+      t += `The lock type (${verdict.lockType}) means: ${desc}.\n\n`;
+      const bad = [];
+      if (verdict.blocksReads)  bad.push('reads (SELECT)');
+      if (verdict.blocksWrites) bad.push('writes (INSERT / UPDATE / DELETE)');
+      if (verdict.rewritesTable) bad.push('a full rewrite of every physical row');
+      if (bad.length) {
+        t += `⚠️ This operation causes: ${bad.join(' + ')}.`;
+      } else {
+        t += `✅ No meaningful blocking of reads or writes — the lock is structural and brief, not duration-scaled.`;
+      }
+      if (verdict.citations?.length) {
+        t += `\n\n**Sources**\n${verdict.citations.slice(0, 2).map(c => `• ${c}`).join('\n')}`;
+      }
+      return t;
+    }
+
+    function genSafeAlternative(verdict, tableSizeLabel) {
+      if (verdict.safeAlternative) {
+        const { title, steps, estLockLabel } = verdict.safeAlternative;
+        let t = `**Safer approach: ${title}**\n\n`;
+        steps.forEach((s, i) => { t += `${i + 1}. ${s}\n`; });
+        if (estLockLabel) t += `\nLock impact with this approach: ${estLockLabel}\n`;
+        t += `\nWith a ${tableSizeLabel} table, this avoids holding the lock during the heavy work — only the brief setup/swap steps block. The bulk of the time is lock-free.`;
+        return t;
+      }
+      if (verdict.severity === 'safe') {
+        let t = `**This operation is already safe.**\n\nIt acquires only a ${verdict.lockType}`;
+        t += verdict.estDurationLabel === 'instant'
+          ? ', which releases in milliseconds'
+          : ` for approximately ${verdict.estDurationLabel}`;
+        t += '. No safer alternative is needed — you can run it directly.';
+        if (verdict.caveats?.length) {
+          t += `\n\n**Still worth knowing:**\n${verdict.caveats.map(c => `• ${c}`).join('\n')}`;
+        }
+        return t;
+      }
+      return `**No built-in safe alternative, but you can reduce impact:**\n\n1. Set a lock_timeout so it fails fast rather than queueing indefinitely\n2. Monitor for long-running transactions before starting: check pg_stat_activity / sys.dm_exec_requests\n3. Schedule it in a low-traffic window\n4. Test on a staging replica to confirm the ${verdict.estDurationLabel} estimate holds for your hardware`;
+    }
+
+    function genRisks(verdict, tableSizeLabel, writesPerSec) {
+      let t = `**Worst-case: ${tableSizeLabel} rows, ${fmtNum(writesPerSec)}/sec writes**\n\n`;
+      if (verdict.caveats?.length) {
+        t += `Known caveats for this rule:\n${verdict.caveats.map(c => `• ${c}`).join('\n')}\n\n`;
+      }
+      if (verdict.blocksWrites || verdict.blocksReads) {
+        t += `At ${fmtNum(writesPerSec)}/sec, every second of lock time queues ${fmtNum(writesPerSec)} write operations. `;
+        t += `Those writes time out, the errors cascade into the application tier, and connection pools saturate — the classic "DDL thundering herd."\n\n`;
+        t += `**Safeguards:**\n`;
+        t += `1. SET lock_timeout = '5s' — fail fast instead of blocking indefinitely\n`;
+        t += `2. SET statement_timeout as a secondary safety net\n`;
+        t += `3. Check for long-running transactions immediately before running\n`;
+        t += `4. Alert on connection pool saturation during the operation`;
+      } else if (verdict.rewritesTable) {
+        t += `The rebuild runs online, but watch for:\n`;
+        t += `• I/O spike during the rebuild can slow all queries on the same host\n`;
+        t += `• You need ~1× table size in free disk space for the shadow copy\n`;
+        t += `• A failure mid-way means a full retry from scratch — no partial progress`;
+      } else {
+        t += `This is a ${verdict.severity} operation. The main risk is the brief lock queueing behind a long-lived transaction — a transaction open for hours will make this DDL wait, and while it waits, every query behind it waits too.\n\n`;
+        t += `Check for long-running queries before running and pick a quiet moment.`;
+      }
+      return t;
+    }
+
+    /* ---------------- chat message renderer ---------------- */
+    function MsgText({ text }) {
+      return (
+        <div className="space-y-0.5">
+          {text.split('\n').map((line, i) => {
+            if (line === '') return <div key={i} className="h-1.5" />;
+            const parts = line.split(/(\*\*[^*]+\*\*)/g);
+            return (
+              <p key={i} className="leading-relaxed">
+                {parts.map((p, j) =>
+                  p.startsWith('**') && p.endsWith('**')
+                    ? <strong key={j}>{p.slice(2, -2)}</strong>
+                    : p
+                )}
+              </p>
+            );
+          })}
+        </div>
+      );
+    }
+
+    /* ---------------- chat panel ---------------- */
+    function ChatPanel({ verdict, engine, version, edition, operationLabel, tableMillions, writesPerSec, onClose }) {
+      const engLabel = ENGINES.find(e => e.value === engine)?.label || engine;
+      const sev = SEV[verdict.severity] || SEV.caution;
+      const tableSizeLabel = fmtRows(tableMillions * 1e6) + ' rows';
+      const introText = `This verdict comes from an auditable rules knowledge base grounded in official ${engLabel} documentation — no AI guessing. Use the quick actions below to go deeper on any angle.`;
+
+      const [msgs, setMsgs] = useState([{ id: 0, role: 'assistant', text: introText }]);
+      const [busy, setBusy]   = useState(false);
+      const scrollRef = useRef(null);
+
+      useEffect(() => {
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      }, [msgs, busy]);
+
+      function ask(userText, genFn) {
+        if (busy) return;
+        setBusy(true);
+        const uid = Date.now();
+        setMsgs(m => [...m, { id: uid, role: 'user', text: userText }]);
+        setTimeout(() => {
+          setMsgs(m => [...m, { id: uid + 1, role: 'assistant', text: genFn() }]);
+          setBusy(false);
+        }, 280);
+      }
+
+      return (
+        <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-2xl overflow-hidden">
+
+          {/* header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shrink-0">
+            <span className="text-sm font-bold text-slate-800 dark:text-slate-100">💬 Migration Advisor</span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setMsgs([{ id: Date.now(), role: 'assistant', text: introText }])}
+                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                Reset
+              </button>
+              <button onClick={onClose} aria-label="Close advisor"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors p-0.5">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* context chip */}
+          <div className="px-4 py-2 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 shrink-0 flex flex-wrap items-center gap-1.5">
+            <span className="text-sm leading-none">{sev.emoji}</span>
+            <span className={`text-xs font-bold ${sev.text}`}>{sev.label}</span>
+            <span className="text-xs text-slate-300 dark:text-slate-600">·</span>
+            <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+              {engLabel} {version}{engine === 'sqlserver' ? ` (${edition})` : ''}
+            </span>
+            <span className="text-xs text-slate-300 dark:text-slate-600">·</span>
+            <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[160px]">{operationLabel}</span>
+          </div>
+
+          {/* messages */}
+          <div ref={scrollRef} className="chat-msgs flex-1 overflow-y-auto px-4 py-3 space-y-2.5 min-h-0">
+            {msgs.map(msg => (
+              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[92%] rounded-2xl px-3.5 py-2.5 text-xs
+                  ${msg.role === 'user'
+                    ? 'bg-brand text-white rounded-br-none'
+                    : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-bl-none'}`}>
+                  <MsgText text={msg.text} />
+                </div>
+              </div>
+            ))}
+            {busy && (
+              <div className="flex justify-start">
+                <div className="bg-slate-100 dark:bg-slate-800 rounded-2xl rounded-bl-none px-4 py-3">
+                  <span className="text-slate-400 text-base tracking-[0.3em]">···</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* action buttons */}
+          <div className="px-3 pt-2 pb-3 space-y-1.5 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shrink-0">
+            {[
+              {
+                label: '🔍 Why does it lock?',
+                gen: () => genLockExplanation(verdict, operationLabel, engLabel, version),
+              },
+              {
+                label: '🛡️ How to do it safely?',
+                gen: () => genSafeAlternative(verdict, tableSizeLabel),
+              },
+              {
+                label: '⚠️ What can go wrong?',
+                gen: () => genRisks(verdict, tableSizeLabel, writesPerSec),
+              },
+            ].map(({ label, gen }) => (
+              <button key={label} disabled={busy} onClick={() => ask(label, gen)}
+                className="w-full text-left rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-300
+                  hover:border-brand hover:text-brand dark:hover:border-red-400 dark:hover:text-red-400
+                  disabled:opacity-40 transition-colors">
+                {label}
+              </button>
+            ))}
+
+            <a href="https://buymeacoffee.com/gsupaek" target="_blank" rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 w-full rounded-xl border border-yellow-300 bg-yellow-50
+                dark:border-yellow-700 dark:bg-yellow-900/20
+                px-3 py-2 text-xs font-semibold text-yellow-700 dark:text-yellow-400
+                hover:bg-yellow-100 dark:hover:bg-yellow-900/40 transition-colors">
+              ☕ Buy me a coffee
+            </a>
+          </div>
+        </div>
+      );
     }
 
     /* ---------------- tooltip ---------------- */
@@ -192,7 +441,6 @@
     }
 
     function Badge({ active, onText, offText, danger = true }) {
-      // active === the "blocked / rewrites" state; danger styling when active is bad
       const cls = active
         ? (danger ? 'bg-risk/15 text-risk dark:text-red-300' : 'bg-warning/15 text-yellow-700 dark:text-yellow-300')
         : 'bg-success/15 text-success dark:text-green-300';
@@ -202,11 +450,11 @@
     /* ---------------- engine loader hook ---------------- */
     function useEngine() {
       const [engine, setEngine] = useState(() => window.MigrationEngine || null);
-      const [error, setError] = useState(() => window.MigrationEngineError || null);
+      const [error, setError]   = useState(() => window.MigrationEngineError || null);
       useEffect(() => {
         if (engine || error) return;
         const ready = () => setEngine(window.MigrationEngine);
-        const fail = () => setError(window.MigrationEngineError || 'Failed to load the rules engine.');
+        const fail  = () => setError(window.MigrationEngineError || 'Failed to load the rules engine.');
         window.addEventListener('engine:ready', ready);
         window.addEventListener('engine:error', fail);
         if (window.MigrationEngine) setEngine(window.MigrationEngine);
@@ -244,8 +492,8 @@
 
             {/* badges */}
             <div className="mt-4 flex flex-wrap gap-2">
-              <Badge active={verdict.blocksReads} onText="Blocks reads" offText="Reads OK" />
-              <Badge active={verdict.blocksWrites} onText="Blocks writes" offText="Writes OK" />
+              <Badge active={verdict.blocksReads}  onText="Blocks reads"   offText="Reads OK" />
+              <Badge active={verdict.blocksWrites} onText="Blocks writes"  offText="Writes OK" />
               <Badge active={verdict.rewritesTable} onText="Rewrites table" offText="No table rewrite" />
             </div>
           </div>
@@ -311,18 +559,29 @@
       const { engine, error } = useEngine();
       const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
 
-      const [engineName, setEngineName] = useState('sqlserver');
-      const [version, setVersion] = useState('2022');
-      const [operation, setOperation] = useState('create_index');
-      const [tableMillions, setTableMillions] = useState(50); // rows in millions
+      const [engineName,   setEngineName]   = useState('sqlserver');
+      const [version,      setVersion]      = useState('2022');
+      const [operation,    setOperation]    = useState('create_index');
+      const [tableMillions, setTableMillions] = useState(50);
       const [writesPerSec, setWritesPerSec] = useState(2000);
-      const [edition, setEdition] = useState('standard');
-      const [copied, setCopied] = useState(false);
+      const [edition,      setEdition]      = useState('standard');
+      const [copied,       setCopied]       = useState(false);
+      const [chatOpen,     setChatOpen]     = useState(false);
+      const [visitCount,   setVisitCount]   = useState(() => window.VisitCount ?? null);
 
       // keep version valid for the selected engine
       useEffect(() => {
         if (!VERSIONS[engineName].includes(version)) setVersion(VERSIONS[engineName][0]);
       }, [engineName]); // eslint-disable-line
+
+      // pick up visitor count whenever Supabase fires
+      useEffect(() => {
+        if (visitCount !== null) return;
+        const h = () => setVisitCount(window.VisitCount ?? null);
+        window.addEventListener('visits:ready', h);
+        if (window.VisitCount != null) setVisitCount(window.VisitCount);
+        return () => window.removeEventListener('visits:ready', h);
+      }, [visitCount]);
 
       const toggleTheme = useCallback(() => {
         setDark((d) => {
@@ -335,23 +594,17 @@
 
       const verdict = useMemo(() => {
         if (!engine) return null;
-        const input = {
-          engine: engineName,
-          version,
-          operation,
-          context: {
-            tableSizeRows: tableMillions * 1_000_000,
-            writesPerSec,
-            edition: engineName === 'sqlserver' ? edition : null,
-            onlineFlag: null,
-          },
-        };
-        return engine.resolveVerdict(input, engine.rules, { onCollision: () => {} });
+        return engine.resolveVerdict(
+          { engine: engineName, version, operation,
+            context: { tableSizeRows: tableMillions * 1_000_000, writesPerSec,
+                       edition: engineName === 'sqlserver' ? edition : null, onlineFlag: null } },
+          engine.rules, { onCollision: () => {} }
+        );
       }, [engine, engineName, version, operation, tableMillions, writesPerSec, edition]);
 
       const copyVerdict = useCallback(() => {
         if (!verdict) return;
-        const opLabel = (OPERATIONS.find((o) => o[0] === operation) || [, operation])[1];
+        const opLabel  = (OPERATIONS.find((o) => o[0] === operation) || [, operation])[1];
         const engLabel = (ENGINES.find((e) => e.value === engineName) || {}).label;
         const text =
 `WILL IT LOCK? — ${SEV[verdict.severity].label.toUpperCase()}
@@ -371,6 +624,11 @@ ${verdict.explanation}` +
         setCopied(true); setTimeout(() => setCopied(false), 1800);
       }, [verdict, engineName, version, operation, tableMillions, edition]);
 
+      const operationLabel = (OPERATIONS.find(o => o[0] === operation) || [, operation])[1];
+
+      // key resets ChatPanel internal state when the verdict selection changes
+      const chatKey = `${engineName}:${version}:${operation}:${edition}`;
+
       return (
         <div className="min-h-screen bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100">
           <header className="border-b border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
@@ -382,24 +640,17 @@ ${verdict.explanation}` +
                   <p className="text-xs text-slate-500 dark:text-slate-400">Know exactly what a schema change does to <em>your</em> table — before you run it.</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <a href="https://buymeacoffee.com/gsupaek" target="_blank" rel="noopener noreferrer"
-                  className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-500 transition-colors hover:border-yellow-400 hover:text-yellow-600 dark:border-slate-600 dark:text-slate-400 dark:hover:border-yellow-400 dark:hover:text-yellow-400"
-                  title="Buy me a coffee">
-                  ☕ <span className="hidden sm:inline">Buy me a coffee</span>
-                </a>
-                <button onClick={toggleTheme} aria-label="Toggle dark mode" title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition-colors hover:border-brand hover:text-brand dark:border-slate-600 dark:text-slate-300 dark:hover:text-red-400">
-                  {dark ? '☀' : '🌙'}
-                </button>
-              </div>
+              <button onClick={toggleTheme} aria-label="Toggle dark mode" title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition-colors hover:border-brand hover:text-brand dark:border-slate-600 dark:text-slate-300 dark:hover:text-red-400">
+                {dark ? '☀' : '🌙'}
+              </button>
             </div>
           </header>
 
           <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
             {error ? (
               <div className="rounded-2xl border border-risk/40 bg-risk/5 p-6 text-sm text-risk dark:bg-risk/10 dark:text-red-300">
-                <p className="font-bold">Couldn’t load the rules engine.</p>
+                <p className="font-bold">Couldn't load the rules engine.</p>
                 <p className="mt-1">{error}</p>
                 <p className="mt-3 text-slate-600 dark:text-slate-300">This page loads <code>rules.json</code> and the engine modules over HTTP, so it must be <strong>served</strong>, not opened directly from disk. Run <code className="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-700">python -m http.server</code> in this folder, or view it on GitHub Pages.</p>
               </div>
@@ -450,10 +701,63 @@ ${verdict.explanation}` +
               </div>
             )}
 
-            <footer className="mt-10 border-t border-slate-200 pt-5 text-center text-xs text-slate-400 dark:border-slate-700 dark:text-slate-500">
-              Verdicts come from an auditable rules knowledge base (<code>rules.json</code>) — no AI guessing, no external calls. Everything runs in your browser.
+            {/* footer */}
+            <footer className="mt-10 border-t border-slate-200 dark:border-slate-700">
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-5 pb-3">
+                {/* visitor counter */}
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  {visitCount != null
+                    ? <span>👁 <strong className="text-slate-500 dark:text-slate-400">{visitCount.toLocaleString()}</strong> migrations checked here</span>
+                    : <span className="invisible">—</span>}
+                </p>
+                {/* buy me a coffee */}
+                <a href="https://buymeacoffee.com/gsupaek" target="_blank" rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 rounded-lg border border-yellow-300 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-900/20
+                    px-3 py-1.5 text-xs font-semibold text-yellow-700 dark:text-yellow-400
+                    hover:bg-yellow-100 dark:hover:bg-yellow-900/40 transition-colors">
+                  ☕ Buy me a coffee
+                </a>
+              </div>
+              <p className="pb-5 text-center text-xs text-slate-400 dark:text-slate-500">
+                Verdicts come from an auditable rules knowledge base (<code>rules.json</code>) — no AI guessing, no external calls. Everything runs in your browser.
+              </p>
             </footer>
           </main>
+
+          {/* floating chat button + panel */}
+          {verdict && (
+            <div className="fixed bottom-6 right-5 z-50 flex flex-col items-end gap-3">
+              {/* panel */}
+              <div
+                className={`w-80 sm:w-[22rem] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden
+                  transition-all duration-200 origin-bottom-right
+                  ${chatOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-3 pointer-events-none'}`}
+                style={{ height: '520px' }}>
+                <ChatPanel
+                  key={chatKey}
+                  verdict={verdict}
+                  engine={engineName}
+                  version={version}
+                  edition={edition}
+                  operationLabel={operationLabel}
+                  tableMillions={tableMillions}
+                  writesPerSec={writesPerSec}
+                  onClose={() => setChatOpen(false)}
+                />
+              </div>
+
+              {/* toggle button */}
+              <button
+                onClick={() => setChatOpen(o => !o)}
+                className={`flex items-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-white shadow-lg transition-all
+                  ${chatOpen ? 'bg-slate-700 hover:bg-slate-600' : 'bg-brand hover:bg-brandDark'}`}
+                aria-label={chatOpen ? 'Close advisor' : 'Open migration advisor'}>
+                {chatOpen
+                  ? <><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 1l10 10M11 1L1 11" stroke="white" strokeWidth="1.8" strokeLinecap="round"/></svg> Close</>
+                  : <>💬 Explain this verdict</>}
+              </button>
+            </div>
+          )}
         </div>
       );
     }
