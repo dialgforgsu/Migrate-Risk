@@ -400,6 +400,399 @@
       );
     }
 
+    /* ---------------- lock matrix data ---------------- */
+    const MATRIX_COLS = [
+      { key: 'pg10',     engine: 'postgres',  label: 'PG ≤10'     },
+      { key: 'pg11',     engine: 'postgres',  label: 'PG 11–12'   },
+      { key: 'pg13',     engine: 'postgres',  label: 'PG 13–14'   },
+      { key: 'pg15',     engine: 'postgres',  label: 'PG 15+'     },
+      { key: 'my57',     engine: 'mysql',     label: 'MySQL 5.7'  },
+      { key: 'my80',     engine: 'mysql',     label: 'MySQL 8.0'  },
+      { key: 'my81',     engine: 'mysql',     label: 'MySQL 8.1+' },
+      { key: 'mssqlstd', engine: 'sqlserver', label: 'MSSQL Std'  },
+      { key: 'mssqlent', engine: 'sqlserver', label: 'MSSQL Ent'  },
+    ];
+
+    const SRC = {
+      PG_ALTER:    { l: 'PG ALTER TABLE docs',    u: 'https://www.postgresql.org/docs/current/sql-altertable.html' },
+      PG11_NOTES:  { l: 'PG 11 release notes',    u: 'https://www.postgresql.org/docs/11/release-11.html' },
+      MY8_ONLINE:  { l: 'MySQL 8.0 online DDL',   u: 'https://dev.mysql.com/doc/refman/8.0/en/innodb-online-ddl-operations.html' },
+      MY57_ONLINE: { l: 'MySQL 5.7 online DDL',   u: 'https://dev.mysql.com/doc/refman/5.7/en/innodb-online-ddl-operations.html' },
+      MSSQL_ALTER: { l: 'MSSQL ALTER TABLE docs', u: 'https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql' },
+      MSSQL_IDX:   { l: 'MSSQL CREATE INDEX',     u: 'https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql' },
+      XATA_BLOG:   { l: 'Xata Engineering Blog',  u: null },
+      BYTEBASE:    { l: 'Bytebase Blog',           u: null },
+      PGROLL:      { l: 'pgroll (xataio)',          u: null },
+    };
+
+    function mcell(sev, rewrite, lock, note, srcs = []) {
+      return { sev, rewrite, lock, note, srcs };
+    }
+    const ms = (note, lock, srcs = [])          => mcell('safe',    false, lock, note, srcs);
+    const mw = (note, lock, rw = false, srcs=[])=> mcell('caution', rw,   lock, note, srcs);
+    const md = (note, lock, rw = true,  srcs=[])=> mcell('danger',  rw,   lock, note, srcs);
+
+    const MATRIX_ROWS = [
+      {
+        op: 'Add column — nullable',
+        key: 'add_col_null',
+        cells: {
+          pg10:     ms('Catalog-only — instant at any size',                           'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          pg11:     ms('Catalog-only',                                                 'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          pg13:     ms('Catalog-only',                                                 'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          pg15:     ms('Catalog-only',                                                 'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          my57:     mw('INPLACE rebuild — reads continue, writes queue at swap',       'metadata + INPLACE rebuild', true,  [SRC.MY57_ONLINE]),
+          my80:     ms('ALGORITHM=INSTANT since 8.0.12',                               'metadata-only',            [SRC.MY8_ONLINE]),
+          my81:     ms('ALGORITHM=INSTANT',                                            'metadata-only',            [SRC.MY8_ONLINE]),
+          mssqlstd: ms('Catalog-only, no row touch',                                  'Sch-M (brief)',             [SRC.MSSQL_ALTER]),
+          mssqlent: ms('Catalog-only, no row touch',                                  'Sch-M (brief)',             [SRC.MSSQL_ALTER]),
+        },
+      },
+      {
+        op: 'Add column — constant DEFAULT',
+        key: 'add_col_const_default',
+        cells: {
+          pg10:     md('Full table rewrite — every row updated with the default value', 'ACCESS EXCLUSIVE',         true, [SRC.PG_ALTER]),
+          pg11:     ms('Metadata-only since PG 11 — default stored in catalog, no row touch', 'ACCESS EXCLUSIVE (brief)', [SRC.PG11_NOTES, SRC.XATA_BLOG]),
+          pg13:     ms('Metadata-only',                                                'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          pg15:     ms('Metadata-only',                                                'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          my57:     mw('INPLACE rebuild — full table copy at 250k rows/sec',           'metadata + INPLACE rebuild', true,  [SRC.MY57_ONLINE]),
+          my80:     ms('ALGORITHM=INSTANT (8.0.12+) for most column types',            'metadata-only',            [SRC.MY8_ONLINE]),
+          my81:     ms('ALGORITHM=INSTANT',                                            'metadata-only',            [SRC.MY8_ONLINE]),
+          mssqlstd: ms('Metadata-only — default stored per column def, existing rows get NULL', 'Sch-M (brief)',    [SRC.MSSQL_ALTER]),
+          mssqlent: ms('Metadata-only',                                                'Sch-M (brief)',             [SRC.MSSQL_ALTER]),
+        },
+      },
+      {
+        op: 'Add column — volatile DEFAULT (now(), random())',
+        key: 'add_col_volatile',
+        cells: {
+          pg10:     md('Full rewrite — evaluates expression for every existing row',   'ACCESS EXCLUSIVE',         true, [SRC.PG_ALTER]),
+          pg11:     md('Full rewrite — volatile expressions cannot be deferred',       'ACCESS EXCLUSIVE',         true, [SRC.PG11_NOTES]),
+          pg13:     md('Full rewrite',                                                 'ACCESS EXCLUSIVE',         true, [SRC.PG_ALTER]),
+          pg15:     md('Full rewrite',                                                 'ACCESS EXCLUSIVE',         true, [SRC.PG_ALTER]),
+          my57:     mw('INPLACE rebuild — existing rows not backfilled (unlike PG)',  'metadata + INPLACE rebuild', true,  [SRC.MY57_ONLINE]),
+          my80:     mw('INPLACE rebuild — existing rows not backfilled',              'metadata + INPLACE rebuild', true,  [SRC.MY8_ONLINE]),
+          my81:     mw('INPLACE rebuild for expression defaults',                     'metadata + INPLACE rebuild', true,  [SRC.MY8_ONLINE]),
+          mssqlstd: ms('Metadata-only — existing rows get NULL, not the expression', 'Sch-M (brief)',             [SRC.MSSQL_ALTER]),
+          mssqlent: ms('Metadata-only — existing rows get NULL',                     'Sch-M (brief)',             [SRC.MSSQL_ALTER]),
+        },
+      },
+      {
+        op: 'Create index',
+        key: 'create_index',
+        cells: {
+          pg10:     md('Full ACCESS EXCLUSIVE for entire build — blocks all reads + writes', 'ACCESS EXCLUSIVE',   false, [SRC.PG_ALTER]),
+          pg11:     md('Full ACCESS EXCLUSIVE',                                         'ACCESS EXCLUSIVE',        false, [SRC.PG_ALTER]),
+          pg13:     md('Full ACCESS EXCLUSIVE',                                         'ACCESS EXCLUSIVE',        false, [SRC.PG_ALTER]),
+          pg15:     md('Full ACCESS EXCLUSIVE',                                         'ACCESS EXCLUSIVE',        false, [SRC.PG_ALTER]),
+          my57:     ms('INPLACE LOCK=NONE by default — fully online',                  'INPLACE, LOCK=NONE',       [SRC.MY57_ONLINE]),
+          my80:     ms('INPLACE LOCK=NONE — reads+writes unblocked throughout',        'INPLACE, LOCK=NONE',       [SRC.MY8_ONLINE]),
+          my81:     ms('INPLACE LOCK=NONE',                                            'INPLACE, LOCK=NONE',       [SRC.MY8_ONLINE]),
+          mssqlstd: md('No ONLINE option — full Sch-M for entire build',               'Sch-M',                   false, [SRC.MSSQL_IDX]),
+          mssqlent: ms('ONLINE=ON: S lock, reads+writes continue during build',        'S (shared)',               [SRC.MSSQL_IDX]),
+        },
+      },
+      {
+        op: 'Create index CONCURRENTLY / ONLINE',
+        key: 'create_index_concurrent',
+        cells: {
+          pg10:     ms('Two full scans; only blocks other DDL — no DML lock',           'SHARE UPDATE EXCLUSIVE',  [SRC.PG_ALTER]),
+          pg11:     ms('Two full scans; no DML lock',                                   'SHARE UPDATE EXCLUSIVE',  [SRC.PG_ALTER]),
+          pg13:     ms('Two full scans; no DML lock',                                   'SHARE UPDATE EXCLUSIVE',  [SRC.PG_ALTER]),
+          pg15:     ms('Two full scans; no DML lock',                                   'SHARE UPDATE EXCLUSIVE',  [SRC.PG_ALTER]),
+          my57:     ms('Standard CREATE INDEX is already online (LOCK=NONE)',           'INPLACE, LOCK=NONE',       [SRC.MY57_ONLINE]),
+          my80:     ms('Standard CREATE INDEX already online',                          'INPLACE, LOCK=NONE',       [SRC.MY8_ONLINE]),
+          my81:     ms('Standard CREATE INDEX already online',                          'INPLACE, LOCK=NONE',       [SRC.MY8_ONLINE]),
+          mssqlstd: mw('No ONLINE option on Standard — mitigate with maintenance window or pt-osc', 'Sch-M', false, [SRC.MSSQL_IDX]),
+          mssqlent: ms('ONLINE=ON available',                                           'S (shared)',               [SRC.MSSQL_IDX]),
+        },
+      },
+      {
+        op: 'Alter column type',
+        key: 'alter_col_type',
+        cells: {
+          pg10:     md('Full rewrite for almost all type changes',                     'ACCESS EXCLUSIVE',         true, [SRC.PG_ALTER]),
+          pg11:     md('Full rewrite; use expand-contract or pgroll for zero-downtime', 'ACCESS EXCLUSIVE',        true, [SRC.PG_ALTER, SRC.PGROLL]),
+          pg13:     md('Full rewrite',                                                 'ACCESS EXCLUSIVE',         true, [SRC.PG_ALTER]),
+          pg15:     md('Full rewrite',                                                 'ACCESS EXCLUSIVE',         true, [SRC.PG_ALTER, SRC.BYTEBASE]),
+          my57:     mw('COPY algorithm for most type changes',                         'metadata + COPY',          true, [SRC.MY57_ONLINE]),
+          my80:     mw('VARCHAR increase within same row-length class can be INSTANT; larger changes need COPY', 'varies', false, [SRC.MY8_ONLINE]),
+          my81:     mw('Some type changes INSTANT; complex casts need COPY',           'varies',                   false, [SRC.MY8_ONLINE]),
+          mssqlstd: ms('Metadata-only for in-type expansions (e.g. VARCHAR increase)', 'Sch-M (brief)',            [SRC.MSSQL_ALTER]),
+          mssqlent: ms('Metadata-only for in-type expansions',                         'Sch-M (brief)',            [SRC.MSSQL_ALTER]),
+        },
+      },
+      {
+        op: 'Add NOT NULL constraint',
+        key: 'add_not_null',
+        cells: {
+          pg10:     md('Full scan; safe path: ADD CONSTRAINT ... NOT VALID, then VALIDATE CONSTRAINT', 'ACCESS EXCLUSIVE', false, [SRC.PG_ALTER]),
+          pg11:     md('Full scan; safe path: NOT VALID + VALIDATE (SHARE UPDATE EXCLUSIVE)', 'ACCESS EXCLUSIVE', false, [SRC.PG_ALTER]),
+          pg13:     md('Same safe path applies',                                       'ACCESS EXCLUSIVE',         false, [SRC.PG_ALTER]),
+          pg15:     md('Same safe path applies',                                       'ACCESS EXCLUSIVE',         false, [SRC.PG_ALTER]),
+          my57:     mw('COPY algorithm if any NULLs exist — reads OK, writes queue',  'metadata + COPY',          true, [SRC.MY57_ONLINE]),
+          my80:     mw('Can be INSTANT if column is already NULL-free; COPY otherwise', 'varies',                 false, [SRC.MY8_ONLINE]),
+          my81:     mw('INSTANT if verified NULL-free; COPY otherwise',                'varies',                   false, [SRC.MY8_ONLINE]),
+          mssqlstd: mw('Full table scan + Sch-M held throughout',                     'Sch-M',                    false, [SRC.MSSQL_ALTER]),
+          mssqlent: mw('Full table scan + Sch-M held throughout',                     'Sch-M',                    false, [SRC.MSSQL_ALTER]),
+        },
+      },
+      {
+        op: 'Drop column',
+        key: 'drop_column',
+        cells: {
+          pg10:     ms('Marks column invisible in catalog — no data removal at drop time', 'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          pg11:     ms('Catalog-only mark — fast',                                     'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          pg13:     ms('Catalog-only mark — fast',                                     'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          pg15:     ms('Catalog-only mark — fast',                                     'ACCESS EXCLUSIVE (brief)', [SRC.PG_ALTER]),
+          my57:     mw('INPLACE rebuild — physically removes column data',             'metadata + INPLACE rebuild', true, [SRC.MY57_ONLINE]),
+          my80:     mw('INPLACE rebuild (INSTANT DROP available in 8.0.29+ for non-first columns)', 'metadata + INPLACE rebuild', true, [SRC.MY8_ONLINE]),
+          my81:     ms('INSTANT for most DROP COLUMN cases',                           'metadata-only',            [SRC.MY8_ONLINE]),
+          mssqlstd: ms('Logical column removal — pages reclaimed lazily',             'Sch-M (brief)',             [SRC.MSSQL_ALTER]),
+          mssqlent: ms('Logical column removal',                                       'Sch-M (brief)',             [SRC.MSSQL_ALTER]),
+        },
+      },
+    ];
+
+    /* ---------------- LockMatrix component ---------------- */
+    function LockMatrix() {
+      const ALL_ENGINES = ['postgres', 'mysql', 'sqlserver'];
+      const ENG_LABELS  = { postgres: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server' };
+      const [active, setActive] = useState(new Set(ALL_ENGINES));
+
+      function toggleEngine(eng) {
+        setActive(prev => {
+          const next = new Set(prev);
+          if (next.has(eng)) { if (next.size > 1) next.delete(eng); }
+          else next.add(eng);
+          return next;
+        });
+      }
+
+      const visibleCols = MATRIX_COLS.filter(c => active.has(c.engine));
+      const engColSpans = ALL_ENGINES
+        .filter(e => active.has(e))
+        .map(e => ({ eng: e, span: MATRIX_COLS.filter(c => c.engine === e).length }));
+
+      return (
+        <section className="mt-12">
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-extrabold text-slate-800 dark:text-slate-100">Version Lock Matrix</h2>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">How lock behaviour changes across engine versions — every cell cites its source</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {ALL_ENGINES.map(eng => (
+                <button key={eng} onClick={() => toggleEngine(eng)}
+                  className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors
+                    ${active.has(eng)
+                      ? 'border-brand bg-brand text-white'
+                      : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>
+                  {ENG_LABELS[eng]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-x-auto">
+            <table className="w-full min-w-max border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-slate-800/70">
+                  <th className="sticky left-0 z-10 bg-slate-50 dark:bg-slate-800/70 px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 dark:text-slate-400 min-w-[200px] border-b border-slate-200 dark:border-slate-700">Operation</th>
+                  {engColSpans.map(({ eng, span }, i) => (
+                    <th key={eng} colSpan={span}
+                      className={`px-2 py-2.5 text-center text-[11px] font-bold text-slate-700 dark:text-slate-100 border-b border-slate-200 dark:border-slate-700
+                        ${i > 0 ? 'border-l border-slate-200 dark:border-slate-700' : ''}`}>
+                      {ENG_LABELS[eng]}
+                    </th>
+                  ))}
+                </tr>
+                <tr className="bg-slate-50/80 dark:bg-slate-800/50 border-b-2 border-slate-200 dark:border-slate-700">
+                  <th className="sticky left-0 z-10 bg-slate-50/80 dark:bg-slate-800/50 px-4 py-1.5" />
+                  {visibleCols.map((col, i) => {
+                    const firstInGroup = i === 0 || visibleCols[i-1].engine !== col.engine;
+                    return (
+                      <th key={col.key}
+                        className={`px-3 py-1.5 text-center text-[10px] font-semibold text-slate-400 dark:text-slate-500 whitespace-nowrap
+                          ${firstInGroup ? 'border-l border-slate-200 dark:border-slate-700' : ''}`}>
+                        {col.label}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {MATRIX_ROWS.map((row, ri) => {
+                  const isEven = ri % 2 === 0;
+                  const rowBg  = isEven ? 'bg-white dark:bg-slate-900' : 'bg-slate-50/60 dark:bg-slate-800/25';
+                  return (
+                    <tr key={row.key} className={`${rowBg} border-b border-slate-100 dark:border-slate-800 last:border-b-0`}>
+                      <td className={`sticky left-0 z-10 ${rowBg} px-4 py-3 font-semibold text-[11px] text-slate-700 dark:text-slate-200 leading-snug`}>
+                        {row.op}
+                      </td>
+                      {visibleCols.map((col, i) => {
+                        const cell = row.cells[col.key];
+                        const firstInGroup = i === 0 || visibleCols[i-1].engine !== col.engine;
+                        if (!cell) return (
+                          <td key={col.key} className={`px-3 py-3 text-center text-slate-300 dark:text-slate-600 ${firstInGroup ? 'border-l border-slate-200 dark:border-slate-700' : ''}`}>—</td>
+                        );
+                        const sev = SEV[cell.sev] || SEV.caution;
+                        const withLinks = cell.srcs.filter(s => s.u);
+                        const withNames = cell.srcs.filter(s => !s.u);
+                        return (
+                          <td key={col.key} className={`px-2.5 py-2.5 align-top ${firstInGroup ? 'border-l border-slate-200 dark:border-slate-700' : ''}`}>
+                            <div className="flex items-start gap-1.5">
+                              <span className="text-sm leading-none mt-px shrink-0">{sev.emoji}</span>
+                              <div className="min-w-0">
+                                <p className={`text-[10px] font-bold leading-tight ${sev.text}`}>{cell.lock}</p>
+                                <p className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400 leading-snug">{cell.note}</p>
+                                {cell.rewrite && (
+                                  <span className="mt-1 inline-block text-[9px] font-semibold bg-risk/10 text-risk dark:bg-risk/20 dark:text-red-400 px-1.5 py-0.5 rounded">rewrites table</span>
+                                )}
+                                {(withLinks.length > 0 || withNames.length > 0) && (
+                                  <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                                    {withLinks.map((s, si) => (
+                                      <a key={si} href={s.u} target="_blank" rel="noopener noreferrer"
+                                        className="text-[9px] text-brand hover:underline dark:text-red-400">
+                                        {s.l} ↗
+                                      </a>
+                                    ))}
+                                    {withNames.map((s, si) => (
+                                      <span key={si} className="text-[9px] italic text-slate-400 dark:text-slate-500">{s.l}</span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-4 text-[10px] text-slate-400 dark:text-slate-500">
+            {Object.entries(SEV).map(([k, v]) => (
+              <span key={k} className="flex items-center gap-1">{v.emoji} {v.label}</span>
+            ))}
+            <span>· <strong className="text-risk">rewrites table</strong> = full physical copy required (duration scales with row count)</span>
+          </div>
+        </section>
+      );
+    }
+
+    /* ---------------- scenarios data + component ---------------- */
+    const SCENARIOS = [
+      {
+        title: 'Adding a column to a 100M-row table',
+        icon: '📋',
+        rows: [
+          { label: 'PostgreSQL 13',  sev: 'safe',    time: 'instant',       detail: 'ADD COLUMN col INT DEFAULT 42 — metadata-only since PG 11. The constant default is stored in pg_attrdef; existing rows never touched. ACCESS EXCLUSIVE lock lasts milliseconds.' },
+          { label: 'PostgreSQL 10',  sev: 'danger',  time: '~7 min',        detail: 'Same statement rewrites every row. At 250k rows/sec: 100M ÷ 250k ≈ 400 sec. Full ACCESS EXCLUSIVE held throughout — no reads or writes get through.' },
+          { label: 'MySQL 8.0',      sev: 'safe',    time: 'instant',       detail: 'ALGORITHM=INSTANT (added in 8.0.12) — catalog change only. Works for most column types and constant defaults; brief metadata lock bookends the operation.' },
+          { label: 'MySQL 5.7',      sev: 'caution', time: '~7 min',        detail: 'ALGORITHM=INPLACE rebuild — ~400 sec at 250k rows/sec. Reads continue on the original; writes queue at the final swap. Unlike PG 10, existing rows are NOT updated with the default (it's evaluated on first read).' },
+        ],
+      },
+      {
+        title: 'Building an index on a 500M-row orders table',
+        icon: '🗂️',
+        rows: [
+          { label: 'PG: CREATE INDEX CONCURRENTLY', sev: 'safe',    time: '~16–33 min',  detail: 'Two full sequential scans. First builds the index; second catches DML changes during the first scan. Only blocks other DDL (SHARE UPDATE EXCLUSIVE). Reads and writes continue throughout both scans.' },
+          { label: 'PG: CREATE INDEX (plain)',       sev: 'danger',  time: '~16 min',     detail: 'Same ~16 min scan (500M ÷ 500k rows/sec = 1000 sec), but holds ACCESS EXCLUSIVE the entire time. Every SELECT, INSERT, UPDATE, DELETE queues. Avoid on any live production table.' },
+          { label: 'MySQL',                          sev: 'safe',    time: '~16 min',     detail: 'Online by default since MySQL 5.6 (ALGORITHM=INPLACE LOCK=NONE). 500M rows at ~500k rows/sec ≈ 1000 sec. Reads and writes fully unblocked throughout the entire build.' },
+          { label: 'SQL Server Enterprise (ONLINE=ON)', sev: 'safe', time: '~16 min',     detail: 'Shared (S) lock — other transactions read and write DML freely while the index builds. Only DDL schema changes are blocked during the build.' },
+          { label: 'SQL Server Standard',            sev: 'danger',  time: '~16 min',     detail: 'ONLINE=ON is Enterprise-only. Standard takes a full Sch-M (Schema Modification) lock for the entire build — both reads and writes blocked for ~16 min. Same query, catastrophically different outcome.' },
+        ],
+      },
+      {
+        title: 'Adding NOT NULL to a populated column',
+        icon: '🚫',
+        rows: [
+          { label: 'PostgreSQL — naive',     sev: 'danger', time: '~7 min per 100M rows', detail: 'ALTER TABLE t ALTER COLUMN c SET NOT NULL scans every row under ACCESS EXCLUSIVE. On a 100M-row table: ~400 sec of total unavailability.' },
+          { label: 'PostgreSQL — safe path', sev: 'safe',   time: 'instant + background', detail: '1. ALTER TABLE t ADD CONSTRAINT c_nn CHECK (c IS NOT NULL) NOT VALID — instant, no scan. 2. ALTER TABLE t VALIDATE CONSTRAINT c_nn — takes only SHARE UPDATE EXCLUSIVE (no DML block) and scans in the background. 3. ALTER TABLE t ALTER COLUMN c SET NOT NULL — instant once the validated constraint exists in pg_constraint.' },
+          { label: 'MySQL 5.7',              sev: 'caution',time: '~7 min per 100M rows', detail: 'COPY algorithm when NULLs exist — full table copy. Reads continue on the original; writes queue at the swap. No safe online path equivalent to PG\'s NOT VALID pattern.' },
+          { label: 'SQL Server',             sev: 'caution',time: '~2–5 min per 100M rows', detail: 'Full validation scan with Sch-M held throughout. Mitigate: backfill NULLs first in batches, then add the constraint — the scan completes instantly if no NULLs remain, making the Sch-M window milliseconds.' },
+        ],
+      },
+      {
+        title: 'Changing a column from VARCHAR(50) → VARCHAR(500)',
+        icon: '✏️',
+        rows: [
+          { label: 'PostgreSQL',    sev: 'danger',  time: '~7 min per 100M rows', detail: 'Almost all type changes require full table rewrite in PG, including VARCHAR length increases. Use the expand-contract pattern (pgroll, Flyway Undo, or manual): add new column → backfill → swap app → drop old column.' },
+          { label: 'MySQL 8.0',     sev: 'safe',    time: 'instant',       detail: 'VARCHAR length increases within the same storage class (both ≤255 bytes, or both >255 bytes) are ALGORITHM=INSTANT. Crossing the 255-byte threshold (e.g. VARCHAR(200)→VARCHAR(300)) requires INPLACE rebuild at ~250k rows/sec.' },
+          { label: 'MySQL 5.7',     sev: 'caution', time: '~7 min per 100M rows', detail: 'INPLACE rebuild for most VARCHAR changes. LOCK=NONE means reads+writes continue, but the full physical rebuild takes time proportional to table size.' },
+          { label: 'SQL Server',    sev: 'safe',    time: 'instant',       detail: 'Increasing VARCHAR/NVARCHAR size is a metadata-only change — Sch-M lock lasts milliseconds. Shrinking still requires a data scan. INT→BIGINT is also metadata-only in SQL Server 2016+.' },
+        ],
+      },
+      {
+        title: 'Adding a foreign key to a 50M-row child table',
+        icon: '🔗',
+        rows: [
+          { label: 'PostgreSQL — plain',        sev: 'danger',  time: '~3 min', detail: 'ADD FOREIGN KEY acquires SHARE ROW EXCLUSIVE on the child and SHARE ROW EXCLUSIVE on the parent, then scans all 50M child rows to validate. Blocks all writes on both tables for the full scan duration.' },
+          { label: 'PostgreSQL — NOT VALID',    sev: 'safe',    time: 'instant + background', detail: 'ADD CONSTRAINT fk FOREIGN KEY ... NOT VALID — instant, only enforces on new/updated rows. Later: VALIDATE CONSTRAINT takes only SHARE UPDATE EXCLUSIVE (no write block) and validates historical rows in the background. Best practice for any table with significant traffic.' },
+          { label: 'MySQL',                     sev: 'caution', time: '~3 min', detail: 'INPLACE if both the referencing and referenced columns have appropriate indexes. Brief metadata locks bookend the validation scan; DML continues. Without indexes: COPY algorithm.' },
+          { label: 'SQL Server (WITH CHECK)',   sev: 'caution', time: '~2 min', detail: 'Default WITH CHECK: full validation scan, Sch-M held throughout. For large tables: use WITH NOCHECK (instant) then re-enable with DBCC CHECKCONSTRAINTS during a maintenance window.' },
+        ],
+      },
+    ];
+
+    function Scenarios() {
+      const [open, setOpen] = useState(null);
+      return (
+        <section className="mt-8">
+          <div className="mb-4">
+            <h2 className="text-lg font-extrabold text-slate-800 dark:text-slate-100">Real-world scenarios</h2>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Concrete examples with timing estimates — click any scenario to expand</p>
+          </div>
+          <div className="space-y-3">
+            {SCENARIOS.map((sc, si) => (
+              <div key={si} className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm overflow-hidden">
+                <button
+                  className="w-full flex items-center justify-between px-5 py-4 text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/40"
+                  onClick={() => setOpen(open === si ? null : si)}>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xl leading-none">{sc.icon}</span>
+                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{sc.title}</span>
+                  </div>
+                  <svg className={`shrink-0 text-slate-400 transition-transform duration-150 ${open === si ? 'rotate-180' : ''}`}
+                    width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M2 4.5l5 5 5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+                {open === si && (
+                  <div className="border-t border-slate-100 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {sc.rows.map((row, ri) => {
+                      const sev = SEV[row.sev] || SEV.caution;
+                      return (
+                        <div key={ri} className="px-5 py-4 flex items-start gap-3">
+                          <span className="text-base leading-none mt-0.5 shrink-0">{sev.emoji}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-1.5">
+                              <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{row.label}</span>
+                              <span className={`text-[11px] font-bold ${sev.text}`}>{sev.label}</span>
+                              <code className="text-[11px] text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded font-mono">{row.time}</code>
+                            </div>
+                            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">{row.detail}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-[10px] text-slate-400 dark:text-slate-500">
+            Timing estimates assume 250k rows/sec for table rewrites, 500k rows/sec for index builds. Benchmark on a staging replica before production.
+          </p>
+        </section>
+      );
+    }
+
     /* ---------------- tooltip ---------------- */
     function InfoTip({ children, why, align = 'center' }) {
       const pos = align === 'right' ? 'right-0' : align === 'left' ? 'left-0' : 'left-1/2 -translate-x-1/2';
@@ -725,6 +1118,10 @@ ${verdict.explanation}` +
                 </section>
               </div>
             )}
+
+            {/* matrix + scenarios — always shown, independent of verdict state */}
+            <LockMatrix />
+            <Scenarios />
 
             {/* footer */}
             <footer className="mt-10 border-t border-slate-200 dark:border-slate-700">
