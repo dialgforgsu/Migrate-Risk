@@ -694,7 +694,7 @@
           { label: 'PostgreSQL 13',  sev: 'safe',    time: 'instant',       detail: 'ADD COLUMN col INT DEFAULT 42 — metadata-only since PG 11. The constant default is stored in pg_attrdef; existing rows never touched. ACCESS EXCLUSIVE lock lasts milliseconds.' },
           { label: 'PostgreSQL 10',  sev: 'danger',  time: '~7 min',        detail: 'Same statement rewrites every row. At 250k rows/sec: 100M ÷ 250k ≈ 400 sec. Full ACCESS EXCLUSIVE held throughout — no reads or writes get through.' },
           { label: 'MySQL 8.0',      sev: 'safe',    time: 'instant',       detail: 'ALGORITHM=INSTANT (added in 8.0.12) — catalog change only. Works for most column types and constant defaults; brief metadata lock bookends the operation.' },
-          { label: 'MySQL 5.7',      sev: 'caution', time: '~7 min',        detail: 'ALGORITHM=INPLACE rebuild — ~400 sec at 250k rows/sec. Reads continue on the original; writes queue at the final swap. Unlike PG 10, existing rows are NOT updated with the default (it's evaluated on first read).' },
+          { label: 'MySQL 5.7',      sev: 'caution', time: '~7 min',        detail: 'ALGORITHM=INPLACE rebuild — ~400 sec at 250k rows/sec. Reads continue on the original; writes queue at the final swap. Unlike PG 10, existing rows are NOT updated with the default (evaluated on first read).' },
         ],
       },
       {
