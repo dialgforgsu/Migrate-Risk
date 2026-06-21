@@ -314,6 +314,70 @@ test('create_index_concurrent: SQL Server standard → caution (ONLINE unavailab
   assert.equal(v.blocksWrites, false);
 });
 
+// --- new rules: add_column_nullable / add_column_constant_default /
+//     add_column_volatile_default / create_index (mysql) ------------------
+
+test('add_column_nullable: Postgres → safe, instant catalog change', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'add_column_nullable', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_add_col_nullable');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.rewritesTable, false);
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+test('add_column_nullable: MySQL 5.7 → caution, INPLACE rebuild (no block)', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '5.7', operation: 'add_column_nullable', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_add_col_nullable_pre8');
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.rewritesTable, true);
+  assert.equal(v.blocksWrites, false);
+});
+
+test('create_index: MySQL → safe, already runs INPLACE LOCK=NONE', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'create_index', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_create_index');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.blocksReads, false);
+  assert.equal(v.blocksWrites, false);
+});
+
+test('add_column_constant_default: MySQL 8 → safe, INSTANT', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'add_column_constant_default', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_add_col_const_default_v8');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+test('add_column_constant_default: MySQL 5.7 → caution, INPLACE rebuild', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '5.7', operation: 'add_column_constant_default', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_add_col_const_default_pre8');
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.rewritesTable, true);
+});
+
+test('add_column_volatile_default: MySQL → caution, INPLACE (no row-value write, unlike Postgres)', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '8.0', operation: 'add_column_volatile_default', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_add_col_volatile_default');
+  assert.equal(v.severity, 'caution');
+  assert.equal(v.blocksWrites, false);
+  assert.equal(v.rewritesTable, true);
+});
+
+test('add_column_constant_default: SQL Server → safe, metadata-only (existing rows get NULL)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'add_column_constant_default', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_add_col_const_default');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.rewritesTable, false);
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+test('add_column_volatile_default: SQL Server → safe, metadata-only (existing rows get NULL)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2019', operation: 'add_column_volatile_default', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_add_col_volatile_default');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.rewritesTable, false);
+});
+
 test('no accidental rule collisions across the whole knowledge base', () => {
   // Resolve every engine/version/operation the UI can produce; fail if any
   // real lookup triggers the collision warning (two equally-specific rules).
