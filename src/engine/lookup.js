@@ -60,7 +60,6 @@ function fallbackVerdict() {
     explanation: 'No specific rule for this operation/version yet — verify manually.',
     safeAlternative: null,
     caveats: ['This engine/version/operation combination is not yet in the rules knowledge base.'],
-    redgateHook: null,
     citations: [],
     matchedRuleId: null,
   };
@@ -128,7 +127,6 @@ export function resolveVerdict(input, rules, opts = {}) {
     explanation: v.explanation,
     safeAlternative: v.safeAlternative ?? null,
     caveats: v.caveats ?? [],
-    redgateHook: v.redgateHook ?? null,
     citations: v.citations ?? [],
     matchedRuleId: winner.id,
   };

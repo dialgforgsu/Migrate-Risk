@@ -15,9 +15,13 @@
         "estDurationModel": "instant",
         "explanation": "Postgres 11+ stores a constant default in the catalog, so adding the column is a metadata change with no table rewrite, regardless of table size. ALTER TABLE still takes an ACCESS EXCLUSIVE lock, but only momentarily.",
         "safeAlternative": null,
-        "caveats": ["Only applies when the default is a constant. A volatile default (e.g. now(), random()) still rewrites the table.", "The brief ACCESS EXCLUSIVE lock can queue behind a long-running transaction; the speed comes from skipping the rewrite, not from a weaker lock."],
-        "redgateHook": "Flyway tracks this as a versioned migration so the safe pattern is repeatable across environments.",
-        "citations": ["Postgres docs (ALTER TABLE): a non-volatile (constant) column default added in v11+ does not rewrite existing rows. https://www.postgresql.org/docs/current/sql-altertable.html"]
+        "caveats": [
+          "Only applies when the default is a constant. A volatile default (e.g. now(), random()) still rewrites the table.",
+          "The brief ACCESS EXCLUSIVE lock can queue behind a long-running transaction; the speed comes from skipping the rewrite, not from a weaker lock."
+        ],
+        "citations": [
+          "Postgres docs (ALTER TABLE): a non-volatile (constant) column default added in v11+ does not rewrite existing rows. https://www.postgresql.org/docs/current/sql-altertable.html"
+        ]
       }
     },
     {
@@ -35,12 +39,17 @@
         "explanation": "Before Postgres 11, adding a column with any default rewrites every row under an ACCESS EXCLUSIVE lock.",
         "safeAlternative": {
           "title": "Two-step migration",
-          "steps": ["ADD COLUMN with no default (instant)", "Backfill in batches", "Set default separately"],
+          "steps": [
+            "ADD COLUMN with no default (instant)",
+            "Backfill in batches",
+            "Set default separately"
+          ],
           "estLockLabel": "<100ms per step"
         },
         "caveats": [],
-        "redgateHook": "SQL Change Automation generates the batched, lock-safe version automatically.",
-        "citations": ["Postgres docs: pre-11 column defaults trigger a full table rewrite."]
+        "citations": [
+          "Postgres docs: pre-11 column defaults trigger a full table rewrite."
+        ]
       }
     },
     {
@@ -57,12 +66,17 @@
         "explanation": "A volatile default forces Postgres to compute a value per row, rewriting the whole table under ACCESS EXCLUSIVE.",
         "safeAlternative": {
           "title": "Two-step migration",
-          "steps": ["ADD COLUMN with no default (instant)", "Backfill in batches", "Set default separately once backfilled"],
+          "steps": [
+            "ADD COLUMN with no default (instant)",
+            "Backfill in batches",
+            "Set default separately once backfilled"
+          ],
           "estLockLabel": "<100ms per step"
         },
         "caveats": [],
-        "redgateHook": "SQL Change Automation generates the safe, batched version automatically in CI/CD.",
-        "citations": ["Postgres docs: volatile defaults require a table rewrite even on v11+."]
+        "citations": [
+          "Postgres docs: volatile defaults require a table rewrite even on v11+."
+        ]
       }
     },
     {
@@ -79,12 +93,19 @@
         "explanation": "A plain CREATE INDEX takes a SHARE lock that blocks all writes for the duration of the build.",
         "safeAlternative": {
           "title": "CREATE INDEX CONCURRENTLY",
-          "steps": ["Use CREATE INDEX CONCURRENTLY", "Note: cannot run inside a transaction block", "Slower overall but does not block writes"],
+          "steps": [
+            "Use CREATE INDEX CONCURRENTLY",
+            "Note: cannot run inside a transaction block",
+            "Slower overall but does not block writes"
+          ],
           "estLockLabel": "no write block"
         },
-        "caveats": ["CONCURRENTLY can leave an invalid index if it fails; you must drop and retry."],
-        "redgateHook": "Flyway can wrap CONCURRENTLY index builds as standalone migrations outside transactions.",
-        "citations": ["Postgres docs: CREATE INDEX takes a write-blocking lock; CONCURRENTLY avoids it."]
+        "caveats": [
+          "CONCURRENTLY can leave an invalid index if it fails; you must drop and retry."
+        ],
+        "citations": [
+          "Postgres docs: CREATE INDEX takes a write-blocking lock; CONCURRENTLY avoids it."
+        ]
       }
     },
     {
@@ -101,9 +122,12 @@
         "estDurationModel": "instant",
         "explanation": "MySQL 8.0 INSTANT DDL adds an eligible column as a metadata-only change in milliseconds, regardless of table size.",
         "safeAlternative": null,
-        "caveats": ["INSTANT only applies to eligible columns (e.g. added at the end of the row in older 8.0.x; relaxed in 8.0.29+). Verify eligibility."],
-        "redgateHook": "Flyway records the INSTANT migration so the same safe path runs in every environment.",
-        "citations": ["MySQL docs: ALGORITHM=INSTANT adds columns as a metadata change in 8.0+."]
+        "caveats": [
+          "INSTANT only applies to eligible columns (e.g. added at the end of the row in older 8.0.x; relaxed in 8.0.29+). Verify eligibility."
+        ],
+        "citations": [
+          "MySQL docs: ALGORITHM=INSTANT adds columns as a metadata change in 8.0+."
+        ]
       }
     },
     {
@@ -120,12 +144,19 @@
         "explanation": "Changing a column type usually forces ALGORITHM=COPY, rebuilding the table and blocking writes.",
         "safeAlternative": {
           "title": "Online schema change tool",
-          "steps": ["Use gh-ost or pt-online-schema-change", "Builds a shadow table and swaps atomically", "Keeps writes flowing via triggers/binlog"],
+          "steps": [
+            "Use gh-ost or pt-online-schema-change",
+            "Builds a shadow table and swaps atomically",
+            "Keeps writes flowing via triggers/binlog"
+          ],
           "estLockLabel": "brief cutover lock only"
         },
-        "caveats": ["INPLACE may be possible for some type changes; check the specific conversion."],
-        "redgateHook": "Redgate's migration tooling integrates these patterns into a tracked, reviewable change.",
-        "citations": ["MySQL docs: many MODIFY COLUMN operations require ALGORITHM=COPY."]
+        "caveats": [
+          "INPLACE may be possible for some type changes; check the specific conversion."
+        ],
+        "citations": [
+          "MySQL docs: many MODIFY COLUMN operations require ALGORITHM=COPY."
+        ]
       }
     },
     {
@@ -142,8 +173,9 @@
         "explanation": "Adding a NULLable column is a metadata-only change in SQL Server and completes near-instantly.",
         "safeAlternative": null,
         "caveats": [],
-        "redgateHook": "SQL Change Automation versions this so it deploys identically across dev, staging, prod.",
-        "citations": ["SQL Server docs: adding a nullable column is a metadata operation."]
+        "citations": [
+          "SQL Server docs: adding a nullable column is a metadata operation."
+        ]
       }
     },
     {
@@ -158,11 +190,15 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "index_build",
-        "explanation": "With ONLINE=ON (Enterprise edition), the index build holds only an intent-shared lock during the main build, with brief shared/Sch-M locks at the start and finish — reads and writes keep flowing.",
+        "explanation": "With ONLINE=ON (Enterprise edition), the index build holds only an intent-shared lock during the main build, with brief shared/Sch-M locks at the start and finish â€” reads and writes keep flowing.",
         "safeAlternative": null,
-        "caveats": ["ONLINE=ON requires Enterprise edition (also available on Azure SQL Database and Azure SQL Managed Instance). On Standard edition the option is unavailable.", "The brief boundary locks wait for in-flight transactions to drain, which can form a short blocking chain."],
-        "redgateHook": "SQL Change Automation can enforce ONLINE=ON where the edition supports it.",
-        "citations": ["SQL Server docs: ONLINE=ON index operations require Enterprise edition (and are supported on Azure SQL Database / Managed Instance). https://learn.microsoft.com/en-us/sql/relational-databases/indexes/how-online-index-operations-work"]
+        "caveats": [
+          "ONLINE=ON requires Enterprise edition (also available on Azure SQL Database and Azure SQL Managed Instance). On Standard edition the option is unavailable.",
+          "The brief boundary locks wait for in-flight transactions to drain, which can form a short blocking chain."
+        ],
+        "citations": [
+          "SQL Server docs: ONLINE=ON index operations require Enterprise edition (and are supported on Azure SQL Database / Managed Instance). https://learn.microsoft.com/en-us/sql/relational-databases/indexes/how-online-index-operations-work"
+        ]
       }
     },
     {
@@ -179,15 +215,22 @@
         "explanation": "Creating a NONCLUSTERED index offline (the Standard-edition default) takes a shared (S) lock that allows reads and data modifications but blocks schema changes. It can still stall a busy table because it waits for in-flight write transactions to drain before it starts.",
         "safeAlternative": {
           "title": "Use ONLINE=ON, or a maintenance window for clustered builds",
-          "steps": ["On Enterprise (or Azure SQL), add WITH (ONLINE=ON) to minimise the boundary locks", "For a CLUSTERED/spatial/XML index, schedule it in a downtime window — that path takes a Sch-M lock"],
+          "steps": [
+            "On Enterprise (or Azure SQL), add WITH (ONLINE=ON) to minimise the boundary locks",
+            "For a CLUSTERED/spatial/XML index, schedule it in a downtime window â€” that path takes a Sch-M lock"
+          ],
           "estLockLabel": "reads & writes continue (nonclustered)"
         },
-        "caveats": ["This is the nonclustered case. Creating a CLUSTERED, spatial, or XML index offline — or rebuilding/dropping any index — instead takes a Sch-M lock that blocks ALL reads and writes for the whole operation.", "The S lock waits for uncommitted writes to complete before it starts, which can form a blocking chain on a busy table.", "Large builds consume significant I/O even though they do not block DML."],
-        "redgateHook": "Redgate flags edition-dependent operations and clustered-vs-nonclustered differences before they reach production.",
-        "citations": ["SQL Server docs (CREATE INDEX): an offline operation that CREATES a nonclustered index takes a shared (S) lock that allows reading and modifying data; creating a clustered/spatial/XML index, or rebuilding/dropping any index, takes a Sch-M lock that blocks all access. https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql"]
+        "caveats": [
+          "This is the nonclustered case. Creating a CLUSTERED, spatial, or XML index offline â€” or rebuilding/dropping any index â€” instead takes a Sch-M lock that blocks ALL reads and writes for the whole operation.",
+          "The S lock waits for uncommitted writes to complete before it starts, which can form a blocking chain on a busy table.",
+          "Large builds consume significant I/O even though they do not block DML."
+        ],
+        "citations": [
+          "SQL Server docs (CREATE INDEX): an offline operation that CREATES a nonclustered index takes a shared (S) lock that allows reading and modifying data; creating a clustered/spatial/XML index, or rebuilding/dropping any index, takes a Sch-M lock that blocks all access. https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql"
+        ]
       }
     },
-
     {
       "id": "pg_drop_column",
       "engine": "postgres",
@@ -199,15 +242,24 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "instant",
-        "explanation": "DROP COLUMN is a catalog-only change in Postgres — the column is marked dropped, not physically removed — so it is near-instant regardless of table size. It still grabs a brief ACCESS EXCLUSIVE lock to update the catalog.",
+        "explanation": "DROP COLUMN is a catalog-only change in Postgres â€” the column is marked dropped, not physically removed â€” so it is near-instant regardless of table size. It still grabs a brief ACCESS EXCLUSIVE lock to update the catalog.",
         "safeAlternative": {
           "title": "Take the lock safely",
-          "steps": ["Set a short lock_timeout so the statement fails fast instead of queueing behind a long transaction", "Run during a quiet period and retry on timeout", "Reclaim the space later with VACUUM FULL or pg_repack"],
+          "steps": [
+            "Set a short lock_timeout so the statement fails fast instead of queueing behind a long transaction",
+            "Run during a quiet period and retry on timeout",
+            "Reclaim the space later with VACUUM FULL or pg_repack"
+          ],
           "estLockLabel": "<100ms when not queued"
         },
-        "caveats": ["The space used by the dropped column is not reclaimed until a table rewrite (VACUUM FULL / pg_repack).", "The brief ACCESS EXCLUSIVE lock still queues behind long-running transactions, and once queued it blocks every query behind it."],
-        "redgateHook": "Flyway versions the change and can wrap it with a lock_timeout so a busy table doesn't stall a deployment.",
-        "citations": ["Postgres docs: DROP COLUMN is a catalog operation; data is removed only when the table is later rewritten.", "Postgres docs: ALTER TABLE acquires ACCESS EXCLUSIVE unless a weaker lock level is documented."]
+        "caveats": [
+          "The space used by the dropped column is not reclaimed until a table rewrite (VACUUM FULL / pg_repack).",
+          "The brief ACCESS EXCLUSIVE lock still queues behind long-running transactions, and once queued it blocks every query behind it."
+        ],
+        "citations": [
+          "Postgres docs: DROP COLUMN is a catalog operation; data is removed only when the table is later rewritten.",
+          "Postgres docs: ALTER TABLE acquires ACCESS EXCLUSIVE unless a weaker lock level is documented."
+        ]
       }
     },
     {
@@ -223,9 +275,13 @@
         "estDurationModel": "rewrite",
         "explanation": "InnoDB drops a column with ALGORITHM=INPLACE, rebuilding the table in the background while reads and writes continue. Only brief metadata locks are taken at the start and end of the operation.",
         "safeAlternative": null,
-        "caveats": ["MySQL 8.0.29+ can drop an eligible column INSTANT (metadata-only, no rebuild) — check your exact minor version.", "The INPLACE rebuild needs free disk roughly equal to the table size and can run long on large tables, even though it does not block DML."],
-        "redgateHook": "Flyway records the migration so the same online path runs identically across environments.",
-        "citations": ["MySQL docs: DROP COLUMN supports ALGORITHM=INPLACE (online); ALGORITHM=INSTANT is available for eligible columns from 8.0.29."]
+        "caveats": [
+          "MySQL 8.0.29+ can drop an eligible column INSTANT (metadata-only, no rebuild) â€” check your exact minor version.",
+          "The INPLACE rebuild needs free disk roughly equal to the table size and can run long on large tables, even though it does not block DML."
+        ],
+        "citations": [
+          "MySQL docs: DROP COLUMN supports ALGORITHM=INPLACE (online); ALGORITHM=INSTANT is available for eligible columns from 8.0.29."
+        ]
       }
     },
     {
@@ -241,12 +297,15 @@
         "explanation": "SQL Server drops a column as a metadata-only change, so it completes near-instantly. It briefly takes a schema-modification (Sch-M) lock that blocks all access while held.",
         "estDurationModel": "instant",
         "safeAlternative": null,
-        "caveats": ["Storage is not reclaimed until you rebuild the clustered index (or heap).", "If the column is referenced by an index, constraint, or default, you must drop those dependencies first."],
-        "redgateHook": "SQL Change Automation flags dependent indexes and constraints before the drop reaches production.",
-        "citations": ["SQL Server docs: dropping a column is a metadata operation; space is reclaimed on the next index rebuild."]
+        "caveats": [
+          "Storage is not reclaimed until you rebuild the clustered index (or heap).",
+          "If the column is referenced by an index, constraint, or default, you must drop those dependencies first."
+        ],
+        "citations": [
+          "SQL Server docs: dropping a column is a metadata operation; space is reclaimed on the next index rebuild."
+        ]
       }
     },
-
     {
       "id": "pg_add_fk",
       "engine": "postgres",
@@ -261,12 +320,18 @@
         "explanation": "Adding a foreign key scans the whole child table to validate existing rows, holding a SHARE ROW EXCLUSIVE lock that blocks writes (reads continue) on both tables for the duration of the scan.",
         "safeAlternative": {
           "title": "Two-step: NOT VALID then VALIDATE",
-          "steps": ["ADD CONSTRAINT ... FOREIGN KEY ... NOT VALID (fast, no scan, brief lock)", "VALIDATE CONSTRAINT in a separate statement — it takes only SHARE UPDATE EXCLUSIVE, so writes keep flowing"],
+          "steps": [
+            "ADD CONSTRAINT ... FOREIGN KEY ... NOT VALID (fast, no scan, brief lock)",
+            "VALIDATE CONSTRAINT in a separate statement â€” it takes only SHARE UPDATE EXCLUSIVE, so writes keep flowing"
+          ],
           "estLockLabel": "writes stay online"
         },
-        "caveats": ["Until VALIDATE CONSTRAINT runs, the key is enforced for new rows but existing rows remain unverified."],
-        "redgateHook": "Flyway splits the NOT VALID and VALIDATE steps into ordered migrations so the safe pattern is repeatable.",
-        "citations": ["Postgres docs: ADD FOREIGN KEY validates existing data under a write-blocking lock; NOT VALID defers the scan to a separate VALIDATE step."]
+        "caveats": [
+          "Until VALIDATE CONSTRAINT runs, the key is enforced for new rows but existing rows remain unverified."
+        ],
+        "citations": [
+          "Postgres docs: ADD FOREIGN KEY validates existing data under a write-blocking lock; NOT VALID defers the scan to a separate VALIDATE step."
+        ]
       }
     },
     {
@@ -280,15 +345,23 @@
         "blocksWrites": true,
         "rewritesTable": true,
         "estDurationModel": "rewrite",
-        "explanation": "With foreign_key_checks enabled (the default), adding a foreign key cannot run INPLACE — InnoDB falls back to ALGORITHM=COPY, rebuilding the table and blocking writes.",
+        "explanation": "With foreign_key_checks enabled (the default), adding a foreign key cannot run INPLACE â€” InnoDB falls back to ALGORITHM=COPY, rebuilding the table and blocking writes.",
         "safeAlternative": {
           "title": "INPLACE with checks disabled, or an online tool",
-          "steps": ["Confirm the data already satisfies the constraint", "SET foreign_key_checks = 0 to allow ALGORITHM=INPLACE, add the constraint, then re-enable it", "For very large tables, use gh-ost or pt-online-schema-change instead"],
+          "steps": [
+            "Confirm the data already satisfies the constraint",
+            "SET foreign_key_checks = 0 to allow ALGORITHM=INPLACE, add the constraint, then re-enable it",
+            "For very large tables, use gh-ost or pt-online-schema-change instead"
+          ],
           "estLockLabel": "brief metadata lock (INPLACE)"
         },
-        "caveats": ["Disabling foreign_key_checks skips validation of existing rows — verify referential integrity yourself first.", "The child column must be indexed; InnoDB adds an index automatically if one is missing."],
-        "redgateHook": "Redgate captures the full sequence (checks off, add, checks on) as one reviewable, tracked change.",
-        "citations": ["MySQL docs: adding a foreign key uses ALGORITHM=COPY when foreign_key_checks is enabled; INPLACE is permitted when it is disabled."]
+        "caveats": [
+          "Disabling foreign_key_checks skips validation of existing rows â€” verify referential integrity yourself first.",
+          "The child column must be indexed; InnoDB adds an index automatically if one is missing."
+        ],
+        "citations": [
+          "MySQL docs: adding a foreign key uses ALGORITHM=COPY when foreign_key_checks is enabled; INPLACE is permitted when it is disabled."
+        ]
       }
     },
     {
@@ -305,15 +378,20 @@
         "explanation": "Adding a checked foreign key scans existing rows to validate them while holding a Sch-M lock that blocks reads and writes for the duration.",
         "safeAlternative": {
           "title": "WITH NOCHECK, validate later",
-          "steps": ["ADD CONSTRAINT ... FOREIGN KEY ... WITH NOCHECK (instant — skips the scan)", "Later, run ALTER TABLE ... WITH CHECK CHECK CONSTRAINT in a quiet window to validate and make it trusted"],
+          "steps": [
+            "ADD CONSTRAINT ... FOREIGN KEY ... WITH NOCHECK (instant â€” skips the scan)",
+            "Later, run ALTER TABLE ... WITH CHECK CHECK CONSTRAINT in a quiet window to validate and make it trusted"
+          ],
           "estLockLabel": "near-instant for the add"
         },
-        "caveats": ["A WITH NOCHECK constraint is 'untrusted': the optimizer ignores it and existing rows are not guaranteed to comply until you validate it."],
-        "redgateHook": "SQL Change Automation can enforce a validate-later step so untrusted constraints don't linger.",
-        "citations": ["SQL Server docs: foreign key creation validates existing data unless WITH NOCHECK is specified; untrusted constraints are not used by the optimizer."]
+        "caveats": [
+          "A WITH NOCHECK constraint is 'untrusted': the optimizer ignores it and existing rows are not guaranteed to comply until you validate it."
+        ],
+        "citations": [
+          "SQL Server docs: foreign key creation validates existing data unless WITH NOCHECK is specified; untrusted constraints are not used by the optimizer."
+        ]
       }
     },
-
     {
       "id": "pg_add_not_null",
       "engine": "postgres",
@@ -328,12 +406,20 @@
         "explanation": "SET NOT NULL takes an ACCESS EXCLUSIVE lock and scans the whole table to prove no NULLs exist, blocking all access for the duration of the scan.",
         "safeAlternative": {
           "title": "Validate via a CHECK constraint first",
-          "steps": ["ADD CONSTRAINT ... CHECK (col IS NOT NULL) NOT VALID (instant)", "VALIDATE CONSTRAINT — scans under a weaker lock while writes keep flowing", "On Postgres 12+, SET NOT NULL then skips its own scan because the validated CHECK already proves it"],
+          "steps": [
+            "ADD CONSTRAINT ... CHECK (col IS NOT NULL) NOT VALID (instant)",
+            "VALIDATE CONSTRAINT â€” scans under a weaker lock while writes keep flowing",
+            "On Postgres 12+, SET NOT NULL then skips its own scan because the validated CHECK already proves it"
+          ],
           "estLockLabel": "writes stay online during validation"
         },
-        "caveats": ["On Postgres 11 and earlier, SET NOT NULL always rescans even when a CHECK constraint exists.", "Existing NULLs cause the operation to fail — backfill them first."],
-        "redgateHook": "Flyway sequences the CHECK / VALIDATE / SET NOT NULL steps so the low-lock path is enforced everywhere.",
-        "citations": ["Postgres docs: SET NOT NULL requires a full table scan under ACCESS EXCLUSIVE; v12+ can skip it when a validated NOT NULL CHECK constraint exists."]
+        "caveats": [
+          "On Postgres 11 and earlier, SET NOT NULL always rescans even when a CHECK constraint exists.",
+          "Existing NULLs cause the operation to fail â€” backfill them first."
+        ],
+        "citations": [
+          "Postgres docs: SET NOT NULL requires a full table scan under ACCESS EXCLUSIVE; v12+ can skip it when a validated NOT NULL CHECK constraint exists."
+        ]
       }
     },
     {
@@ -349,9 +435,14 @@
         "estDurationModel": "rewrite",
         "explanation": "Changing a column to NOT NULL via MODIFY COLUMN runs ALGORITHM=INPLACE in most cases, rebuilding the table online (reads and writes continue) with only brief locks at the start and finish.",
         "safeAlternative": null,
-        "caveats": ["Requires strict SQL mode; existing NULL rows will error (or be coerced) — backfill first.", "Some definitions fall back to ALGORITHM=COPY, which blocks writes — test with ALGORITHM=INPLACE, LOCK=NONE to confirm.", "The rebuild can run long on large tables and needs free disk roughly equal to the table size."],
-        "redgateHook": "Flyway records the change so the same online path runs in every environment.",
-        "citations": ["MySQL docs: MODIFY COLUMN ... NOT NULL can run INPLACE for many definitions; otherwise it requires ALGORITHM=COPY."]
+        "caveats": [
+          "Requires strict SQL mode; existing NULL rows will error (or be coerced) â€” backfill first.",
+          "Some definitions fall back to ALGORITHM=COPY, which blocks writes â€” test with ALGORITHM=INPLACE, LOCK=NONE to confirm.",
+          "The rebuild can run long on large tables and needs free disk roughly equal to the table size."
+        ],
+        "citations": [
+          "MySQL docs: MODIFY COLUMN ... NOT NULL can run INPLACE for many definitions; otherwise it requires ALGORITHM=COPY."
+        ]
       }
     },
     {
@@ -368,15 +459,22 @@
         "explanation": "Altering an existing column to NOT NULL scans every row to confirm there are no NULLs, holding a Sch-M lock that blocks reads and writes for the duration.",
         "safeAlternative": {
           "title": "Backfill, then constrain in a quiet window",
-          "steps": ["Backfill NULLs to valid values in batches", "Optionally add a CHECK (col IS NOT NULL) WITH NOCHECK to enforce new rows immediately", "Run ALTER COLUMN ... NOT NULL during an approved maintenance window"],
+          "steps": [
+            "Backfill NULLs to valid values in batches",
+            "Optionally add a CHECK (col IS NOT NULL) WITH NOCHECK to enforce new rows immediately",
+            "Run ALTER COLUMN ... NOT NULL during an approved maintenance window"
+          ],
           "estLockLabel": "scan blocks for the ALTER"
         },
-        "caveats": ["Existing NULLs cause the ALTER to fail — backfill first.", "Adding a brand-new NOT NULL column instead requires a default value (or an empty table)."],
-        "redgateHook": "SQL Change Automation pairs the backfill and the constraint as one ordered, reviewable change.",
-        "citations": ["SQL Server docs: altering a column to NOT NULL validates existing data under a Sch-M lock."]
+        "caveats": [
+          "Existing NULLs cause the ALTER to fail â€” backfill first.",
+          "Adding a brand-new NOT NULL column instead requires a default value (or an empty table)."
+        ],
+        "citations": [
+          "SQL Server docs: altering a column to NOT NULL validates existing data under a Sch-M lock."
+        ]
       }
     },
-
     {
       "id": "pg_rename_column",
       "engine": "postgres",
@@ -388,11 +486,15 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "instant",
-        "explanation": "Renaming a column is a pure catalog change in Postgres — instant and independent of table size. It takes only a very brief ACCESS EXCLUSIVE lock to swap the name.",
+        "explanation": "Renaming a column is a pure catalog change in Postgres â€” instant and independent of table size. It takes only a very brief ACCESS EXCLUSIVE lock to swap the name.",
         "safeAlternative": null,
-        "caveats": ["The rename is instant, but it can break application code, views, and functions that reference the old name — ship a compatible application deploy alongside it.", "The brief ACCESS EXCLUSIVE lock can still queue behind a long-running transaction."],
-        "redgateHook": "Flyway versions the rename so app and schema changes deploy together in the right order.",
-        "citations": ["Postgres docs: RENAME COLUMN is a metadata-only catalog change."]
+        "caveats": [
+          "The rename is instant, but it can break application code, views, and functions that reference the old name â€” ship a compatible application deploy alongside it.",
+          "The brief ACCESS EXCLUSIVE lock can still queue behind a long-running transaction."
+        ],
+        "citations": [
+          "Postgres docs: RENAME COLUMN is a metadata-only catalog change."
+        ]
       }
     },
     {
@@ -409,9 +511,12 @@
         "estDurationModel": "instant",
         "explanation": "MySQL 8.0's RENAME COLUMN runs ALGORITHM=INPLACE as a metadata-only change, completing in milliseconds regardless of table size.",
         "safeAlternative": null,
-        "caveats": ["Renaming can break application code, views, triggers, and generated columns that reference the old name — deploy a compatible app version alongside."],
-        "redgateHook": "Flyway records the metadata-only rename so it deploys identically across environments.",
-        "citations": ["MySQL docs: ALTER TABLE ... RENAME COLUMN (8.0+) is performed in place without copying the table."]
+        "caveats": [
+          "Renaming can break application code, views, triggers, and generated columns that reference the old name â€” deploy a compatible app version alongside."
+        ],
+        "citations": [
+          "MySQL docs: ALTER TABLE ... RENAME COLUMN (8.0+) is performed in place without copying the table."
+        ]
       }
     },
     {
@@ -426,11 +531,15 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "instant",
-        "explanation": "MySQL 5.7 has no RENAME COLUMN syntax — you rename via CHANGE COLUMN. As long as you keep the same data type and attributes, this runs ALGORITHM=INPLACE, LOCK=NONE: a metadata-only change that permits concurrent reads and writes.",
+        "explanation": "MySQL 5.7 has no RENAME COLUMN syntax â€” you rename via CHANGE COLUMN. As long as you keep the same data type and attributes, this runs ALGORITHM=INPLACE, LOCK=NONE: a metadata-only change that permits concurrent reads and writes.",
         "safeAlternative": null,
-        "caveats": ["CHANGE COLUMN requires restating the column's full definition. If you also change the data type or nullability, it forces ALGORITHM=COPY — a blocking table rebuild. For a pure rename, keep every other attribute identical.", "Upgrading to 8.0 gives you dedicated RENAME COLUMN syntax that removes this footgun."],
-        "redgateHook": "Redgate captures the exact CHANGE COLUMN definition in a reviewable migration so a rename doesn't silently alter the column.",
-        "citations": ["MySQL 5.7 docs (Online DDL): renaming a column, keeping the same data type, is performed in place and permits concurrent DML. https://dev.mysql.com/doc/refman/5.7/en/innodb-online-ddl-operations.html"]
+        "caveats": [
+          "CHANGE COLUMN requires restating the column's full definition. If you also change the data type or nullability, it forces ALGORITHM=COPY â€” a blocking table rebuild. For a pure rename, keep every other attribute identical.",
+          "Upgrading to 8.0 gives you dedicated RENAME COLUMN syntax that removes this footgun."
+        ],
+        "citations": [
+          "MySQL 5.7 docs (Online DDL): renaming a column, keeping the same data type, is performed in place and permits concurrent DML. https://dev.mysql.com/doc/refman/5.7/en/innodb-online-ddl-operations.html"
+        ]
       }
     },
     {
@@ -446,12 +555,15 @@
         "estDurationModel": "instant",
         "explanation": "Renaming a column with sp_rename is a metadata-only change and is effectively instant, taking only a brief schema lock.",
         "safeAlternative": null,
-        "caveats": ["sp_rename does not update references in views, stored procedures, computed columns, indexes, or constraints — they keep the old name and can break. Refresh dependent objects.", "SQL Server itself warns that renaming may break scripts and stored procedures — review dependencies first."],
-        "redgateHook": "SQL Change Automation surfaces dependent objects so a rename doesn't silently break a view or proc.",
-        "citations": ["SQL Server docs: sp_rename changes only the object name; it does not update referencing objects."]
+        "caveats": [
+          "sp_rename does not update references in views, stored procedures, computed columns, indexes, or constraints â€” they keep the old name and can break. Refresh dependent objects.",
+          "SQL Server itself warns that renaming may break scripts and stored procedures â€” review dependencies first."
+        ],
+        "citations": [
+          "SQL Server docs: sp_rename changes only the object name; it does not update referencing objects."
+        ]
       }
     },
-
     {
       "id": "pg_alter_column_type",
       "engine": "postgres",
@@ -466,12 +578,20 @@
         "explanation": "Most column type changes rewrite the entire table to re-encode every value, holding an ACCESS EXCLUSIVE lock that blocks reads and writes for the whole rewrite.",
         "safeAlternative": {
           "title": "Add-and-backfill a new column",
-          "steps": ["Add a new column of the target type (instant)", "Backfill values in batches, optionally with a trigger to keep it in sync", "Swap names in a brief transaction once caught up, then drop the old column"],
+          "steps": [
+            "Add a new column of the target type (instant)",
+            "Backfill values in batches, optionally with a trigger to keep it in sync",
+            "Swap names in a brief transaction once caught up, then drop the old column"
+          ],
           "estLockLabel": "<100ms cutover"
         },
-        "caveats": ["Some conversions skip the rewrite when the new type is binary-coercible from the old (e.g. increasing varchar(n) length); int → bigint is NOT exempt. Verify your specific conversion.", "A USING expression that changes the column contents forces a rewrite; a content-preserving USING over a binary-coercible type does not. Indexes on the column are rebuilt either way."],
-        "redgateHook": "SQL Change Automation generates the add-backfill-swap sequence as a single batched, lock-safe migration.",
-        "citations": ["Postgres docs (ALTER TABLE): changing a column type rewrites the table unless the USING clause does not change the column contents and the old type is binary-coercible to the new type. https://www.postgresql.org/docs/current/sql-altertable.html"]
+        "caveats": [
+          "Some conversions skip the rewrite when the new type is binary-coercible from the old (e.g. increasing varchar(n) length); int â†’ bigint is NOT exempt. Verify your specific conversion.",
+          "A USING expression that changes the column contents forces a rewrite; a content-preserving USING over a binary-coercible type does not. Indexes on the column are rebuilt either way."
+        ],
+        "citations": [
+          "Postgres docs (ALTER TABLE): changing a column type rewrites the table unless the USING clause does not change the column contents and the old type is binary-coercible to the new type. https://www.postgresql.org/docs/current/sql-altertable.html"
+        ]
       }
     },
     {
@@ -488,15 +608,22 @@
         "explanation": "Changing a column's data type usually updates every row while holding a Sch-M lock that blocks reads and writes for the duration.",
         "safeAlternative": {
           "title": "Add-and-backfill a new column",
-          "steps": ["Add a new column of the target type (metadata-only)", "Backfill in batches", "Swap with sp_rename or a short transaction, then drop the old column"],
+          "steps": [
+            "Add a new column of the target type (metadata-only)",
+            "Backfill in batches",
+            "Swap with sp_rename or a short transaction, then drop the old column"
+          ],
           "estLockLabel": "brief cutover"
         },
-        "caveats": ["Some changes are metadata-only (e.g. increasing varchar length within the same base type). Narrowing or changing the base type rewrites and can fail on incompatible data.", "A column in an index or constraint requires dropping those dependencies first."],
-        "redgateHook": "SQL Change Automation generates the add-backfill-swap pattern so a type change never blocks production.",
-        "citations": ["SQL Server docs: ALTER COLUMN that changes type or size may update every row under a Sch-M lock."]
+        "caveats": [
+          "Some changes are metadata-only (e.g. increasing varchar length within the same base type). Narrowing or changing the base type rewrites and can fail on incompatible data.",
+          "A column in an index or constraint requires dropping those dependencies first."
+        ],
+        "citations": [
+          "SQL Server docs: ALTER COLUMN that changes type or size may update every row under a Sch-M lock."
+        ]
       }
     },
-
     {
       "id": "pg_add_col_not_null_v11plus",
       "engine": "postgres",
@@ -511,9 +638,14 @@
         "estDurationModel": "instant",
         "explanation": "On Postgres 11+, adding a NOT NULL column with a constant default stores the default once in the catalog rather than writing it to every row, so there is no table rewrite. ALTER TABLE still takes a brief ACCESS EXCLUSIVE lock.",
         "safeAlternative": null,
-        "caveats": ["A NOT NULL column needs a default on a non-empty table, or the statement fails.", "No rewrite only for a constant default; a volatile default (now(), random()) still rewrites the whole table.", "The brief ACCESS EXCLUSIVE lock can queue behind a long-running transaction."],
-        "redgateHook": "Flyway tracks the constant-default pattern so the safe, instant path is repeatable across environments.",
-        "citations": ["Postgres docs: a constant column default added in v11+ does not rewrite existing rows, including for NOT NULL columns."]
+        "caveats": [
+          "A NOT NULL column needs a default on a non-empty table, or the statement fails.",
+          "No rewrite only for a constant default; a volatile default (now(), random()) still rewrites the whole table.",
+          "The brief ACCESS EXCLUSIVE lock can queue behind a long-running transaction."
+        ],
+        "citations": [
+          "Postgres docs: a constant column default added in v11+ does not rewrite existing rows, including for NOT NULL columns."
+        ]
       }
     },
     {
@@ -531,12 +663,19 @@
         "explanation": "Before Postgres 11, adding a NOT NULL column writes the default into every row, rewriting the whole table under an ACCESS EXCLUSIVE lock.",
         "safeAlternative": {
           "title": "Add nullable, backfill, then constrain",
-          "steps": ["ADD COLUMN nullable with no default (instant)", "Backfill the value in batches", "SET NOT NULL once backfilled (validates under a brief lock)"],
+          "steps": [
+            "ADD COLUMN nullable with no default (instant)",
+            "Backfill the value in batches",
+            "SET NOT NULL once backfilled (validates under a brief lock)"
+          ],
           "estLockLabel": "<100ms per step"
         },
-        "caveats": ["A NOT NULL column requires a default on a non-empty table."],
-        "redgateHook": "SQL Change Automation generates the add-backfill-constrain sequence as one batched migration.",
-        "citations": ["Postgres docs: pre-11 column defaults trigger a full table rewrite."]
+        "caveats": [
+          "A NOT NULL column requires a default on a non-empty table."
+        ],
+        "citations": [
+          "Postgres docs: pre-11 column defaults trigger a full table rewrite."
+        ]
       }
     },
     {
@@ -553,9 +692,13 @@
         "estDurationModel": "instant",
         "explanation": "MySQL 8.0 INSTANT DDL can add a NOT NULL column with a default as a metadata-only change in milliseconds, regardless of table size.",
         "safeAlternative": null,
-        "caveats": ["INSTANT requires a default and an eligible column (rules relaxed in 8.0.29+) — verify eligibility, or it falls back to an INPLACE rebuild.", "A NOT NULL column needs a default on a non-empty table."],
-        "redgateHook": "Flyway records the INSTANT migration so the same safe path runs in every environment.",
-        "citations": ["MySQL docs: ALGORITHM=INSTANT adds columns (including with defaults) as a metadata change in 8.0+."]
+        "caveats": [
+          "INSTANT requires a default and an eligible column (rules relaxed in 8.0.29+) â€” verify eligibility, or it falls back to an INPLACE rebuild.",
+          "A NOT NULL column needs a default on a non-empty table."
+        ],
+        "citations": [
+          "MySQL docs: ALGORITHM=INSTANT adds columns (including with defaults) as a metadata change in 8.0+."
+        ]
       }
     },
     {
@@ -572,9 +715,13 @@
         "estDurationModel": "rewrite",
         "explanation": "On MySQL 5.7 there is no INSTANT add; adding a column runs ALGORITHM=INPLACE, rebuilding the table online (reads and writes continue) with only brief locks at start and finish.",
         "safeAlternative": null,
-        "caveats": ["The INPLACE rebuild can run long on large tables and needs free disk roughly equal to the table size.", "Upgrading to 8.0 gives you a metadata-only INSTANT add."],
-        "redgateHook": "Flyway records the change so the same online path runs identically across environments.",
-        "citations": ["MySQL docs: prior to 8.0 INSTANT, ADD COLUMN uses ALGORITHM=INPLACE (online) but rebuilds the table."]
+        "caveats": [
+          "The INPLACE rebuild can run long on large tables and needs free disk roughly equal to the table size.",
+          "Upgrading to 8.0 gives you a metadata-only INSTANT add."
+        ],
+        "citations": [
+          "MySQL docs: prior to 8.0 INSTANT, ADD COLUMN uses ALGORITHM=INPLACE (online) but rebuilds the table."
+        ]
       }
     },
     {
@@ -589,11 +736,15 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "instant",
-        "explanation": "On Enterprise edition (SQL Server 2012+), adding a NOT NULL column with a runtime-constant default is a metadata-only online operation — the default is not physically written to existing rows.",
+        "explanation": "On Enterprise edition (SQL Server 2012+), adding a NOT NULL column with a runtime-constant default is a metadata-only online operation â€” the default is not physically written to existing rows.",
         "safeAlternative": null,
-        "caveats": ["Only metadata-only when the default is a runtime constant; a non-deterministic default forces a size-of-data update.", "This optimization is Enterprise-only — on Standard the same statement rewrites every row."],
-        "redgateHook": "SQL Change Automation enforces the runtime-constant-default pattern where the edition supports it.",
-        "citations": ["SQL Server docs: adding a NOT NULL column with a constant default is an online, metadata-only operation on Enterprise edition (2012+)."]
+        "caveats": [
+          "Only metadata-only when the default is a runtime constant; a non-deterministic default forces a size-of-data update.",
+          "This optimization is Enterprise-only â€” on Standard the same statement rewrites every row."
+        ],
+        "citations": [
+          "SQL Server docs: adding a NOT NULL column with a constant default is an online, metadata-only operation on Enterprise edition (2012+)."
+        ]
       }
     },
     {
@@ -607,18 +758,25 @@
         "blocksWrites": true,
         "rewritesTable": true,
         "estDurationModel": "rewrite",
-        "explanation": "On Standard edition, adding a NOT NULL column writes the default into every existing row — a size-of-data operation that holds a Sch-M lock blocking reads and writes for the duration.",
+        "explanation": "On Standard edition, adding a NOT NULL column writes the default into every existing row â€” a size-of-data operation that holds a Sch-M lock blocking reads and writes for the duration.",
         "safeAlternative": {
           "title": "Add nullable, backfill, then constrain",
-          "steps": ["Add the column as NULLable (metadata-only)", "Backfill the default in batches", "Add the NOT NULL constraint during a quiet window"],
+          "steps": [
+            "Add the column as NULLable (metadata-only)",
+            "Backfill the default in batches",
+            "Add the NOT NULL constraint during a quiet window"
+          ],
           "estLockLabel": "<100ms for the add"
         },
-        "caveats": ["A NOT NULL column requires a default on a non-empty table.", "Upgrading to Enterprise enables the metadata-only online add for runtime-constant defaults."],
-        "redgateHook": "SQL Change Automation generates the add-backfill-constrain sequence so it never blocks production.",
-        "citations": ["SQL Server docs: on editions without the online add, populating a NOT NULL default updates every row under a Sch-M lock."]
+        "caveats": [
+          "A NOT NULL column requires a default on a non-empty table.",
+          "Upgrading to Enterprise enables the metadata-only online add for runtime-constant defaults."
+        ],
+        "citations": [
+          "SQL Server docs: on editions without the online add, populating a NOT NULL default updates every row under a Sch-M lock."
+        ]
       }
     },
-
     {
       "id": "pg_create_index_concurrent",
       "engine": "postgres",
@@ -632,9 +790,14 @@
         "estDurationModel": "index_build",
         "explanation": "CREATE INDEX CONCURRENTLY builds the index without blocking reads or writes, taking only a SHARE UPDATE EXCLUSIVE lock. It is slower (two table scans) but production-safe.",
         "safeAlternative": null,
-        "caveats": ["CONCURRENTLY cannot run inside a transaction block.", "If the build fails it leaves an INVALID index that you must DROP and recreate.", "It does two passes, so it takes longer than a plain CREATE INDEX."],
-        "redgateHook": "Flyway can run CONCURRENTLY builds as standalone migrations outside a transaction so the safe pattern is automated.",
-        "citations": ["Postgres docs: CREATE INDEX CONCURRENTLY does not block writes but cannot run in a transaction block and may leave an invalid index on failure."]
+        "caveats": [
+          "CONCURRENTLY cannot run inside a transaction block.",
+          "If the build fails it leaves an INVALID index that you must DROP and recreate.",
+          "It does two passes, so it takes longer than a plain CREATE INDEX."
+        ],
+        "citations": [
+          "Postgres docs: CREATE INDEX CONCURRENTLY does not block writes but cannot run in a transaction block and may leave an invalid index on failure."
+        ]
       }
     },
     {
@@ -648,11 +811,15 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "index_build",
-        "explanation": "InnoDB builds a secondary index with ALGORITHM=INPLACE, LOCK=NONE by default — the table remains available for reads and writes throughout, with only brief metadata locks at start and finish.",
+        "explanation": "InnoDB builds a secondary index with ALGORITHM=INPLACE, LOCK=NONE by default â€” the table remains available for reads and writes throughout, with only brief metadata locks at start and finish.",
         "safeAlternative": null,
-        "caveats": ["FULLTEXT and SPATIAL index builds take a more restrictive lock and do not permit concurrent DML.", "The index data structure is still built (it is not purely a metadata change), so the build consumes I/O and can slow a busy server even though it does not block."],
-        "redgateHook": "Flyway records the online index build so it deploys identically across environments.",
-        "citations": ["MySQL docs (Online DDL): creating a secondary index supports ALGORITHM=INPLACE, LOCK=NONE and keeps the table available for read and write; FULLTEXT/SPATIAL indexes are exceptions. https://dev.mysql.com/doc/refman/8.0/en/innodb-online-ddl-operations.html"]
+        "caveats": [
+          "FULLTEXT and SPATIAL index builds take a more restrictive lock and do not permit concurrent DML.",
+          "The index data structure is still built (it is not purely a metadata change), so the build consumes I/O and can slow a busy server even though it does not block."
+        ],
+        "citations": [
+          "MySQL docs (Online DDL): creating a secondary index supports ALGORITHM=INPLACE, LOCK=NONE and keeps the table available for read and write; FULLTEXT/SPATIAL indexes are exceptions. https://dev.mysql.com/doc/refman/8.0/en/innodb-online-ddl-operations.html"
+        ]
       }
     },
     {
@@ -667,11 +834,14 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "index_build",
-        "explanation": "With ONLINE=ON (Enterprise edition), the index build holds only an intent-shared lock during the main build, with brief shared/Sch-M locks at the start and finish — reads and writes keep flowing.",
+        "explanation": "With ONLINE=ON (Enterprise edition), the index build holds only an intent-shared lock during the main build, with brief shared/Sch-M locks at the start and finish â€” reads and writes keep flowing.",
         "safeAlternative": null,
-        "caveats": ["ONLINE=ON requires Enterprise edition (also available on Azure SQL Database and Azure SQL Managed Instance). On Standard edition the option is unavailable."],
-        "redgateHook": "SQL Change Automation enforces ONLINE=ON where the edition supports it.",
-        "citations": ["SQL Server docs: ONLINE=ON index operations require Enterprise edition (and are supported on Azure SQL Database / Managed Instance). https://learn.microsoft.com/en-us/sql/relational-databases/indexes/how-online-index-operations-work"]
+        "caveats": [
+          "ONLINE=ON requires Enterprise edition (also available on Azure SQL Database and Azure SQL Managed Instance). On Standard edition the option is unavailable."
+        ],
+        "citations": [
+          "SQL Server docs: ONLINE=ON index operations require Enterprise edition (and are supported on Azure SQL Database / Managed Instance). https://learn.microsoft.com/en-us/sql/relational-databases/indexes/how-online-index-operations-work"
+        ]
       }
     },
     {
@@ -685,15 +855,22 @@
         "blocksWrites": false,
         "rewritesTable": false,
         "estDurationModel": "index_build",
-        "explanation": "ONLINE=ON is unavailable on Standard edition, so the build runs offline. For a nonclustered index that is a shared (S) lock that allows reads and data modifications but blocks schema changes — and it waits for in-flight writes to drain before starting, which can stall a busy table.",
+        "explanation": "ONLINE=ON is unavailable on Standard edition, so the build runs offline. For a nonclustered index that is a shared (S) lock that allows reads and data modifications but blocks schema changes â€” and it waits for in-flight writes to drain before starting, which can stall a busy table.",
         "safeAlternative": {
           "title": "Move to Enterprise/Azure for ONLINE, or a window for clustered builds",
-          "steps": ["Use Enterprise edition or Azure SQL to get WITH (ONLINE=ON)", "For a CLUSTERED/spatial/XML index, schedule it in a downtime window — that path takes a Sch-M lock that blocks everything"],
+          "steps": [
+            "Use Enterprise edition or Azure SQL to get WITH (ONLINE=ON)",
+            "For a CLUSTERED/spatial/XML index, schedule it in a downtime window â€” that path takes a Sch-M lock that blocks everything"
+          ],
           "estLockLabel": "reads & writes continue (nonclustered)"
         },
-        "caveats": ["The trap is real but narrower than it looks: a nonclustered offline CREATE still allows reads and writes. A CLUSTERED/spatial/XML create — or any index rebuild/drop — takes a Sch-M lock that blocks all access.", "Confirm your edition before relying on ONLINE=ON; on Standard the keyword errors."],
-        "redgateHook": "Redgate flags edition-dependent operations before they reach production.",
-        "citations": ["SQL Server docs (CREATE INDEX): ONLINE=ON is unsupported on Standard; an offline nonclustered CREATE takes a shared (S) lock that allows reading and modifying data. https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql"]
+        "caveats": [
+          "The trap is real but narrower than it looks: a nonclustered offline CREATE still allows reads and writes. A CLUSTERED/spatial/XML create â€” or any index rebuild/drop â€” takes a Sch-M lock that blocks all access.",
+          "Confirm your edition before relying on ONLINE=ON; on Standard the keyword errors."
+        ],
+        "citations": [
+          "SQL Server docs (CREATE INDEX): ONLINE=ON is unsupported on Standard; an offline nonclustered CREATE takes a shared (S) lock that allows reading and modifying data. https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql"
+        ]
       }
     }
   ]
