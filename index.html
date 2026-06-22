@@ -1125,17 +1125,17 @@ ${verdict.explanation}` +
                       </Field>
                     </section>
 
-                    {/* REAL-WORLD SCENARIOS — middle column */}
+                    {/* VERDICT */}
+                    <section className="fade-in">
+                      <Verdict verdict={verdict} copied={copied} onCopy={copyVerdict} />
+                    </section>
+
+                    {/* REAL-WORLD SCENARIOS — right column */}
                     {hasScenarios && (
                       <section>
                         <ContextScenario operation={operation} />
                       </section>
                     )}
-
-                    {/* VERDICT */}
-                    <section className="fade-in">
-                      <Verdict verdict={verdict} copied={copied} onCopy={copyVerdict} />
-                    </section>
                   </div>
                 );
               })()
