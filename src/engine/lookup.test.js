@@ -398,6 +398,146 @@ test('no accidental rule collisions across the whole knowledge base', () => {
   assert.deepEqual(collisions, [], 'unexpected rule collisions:\n' + collisions.join('\n'));
 });
 
+// ── New fixtures covering previously untested rules and edge cases ────────────
+
+// 1. pg_create_index: SHARE lock means writes blocked, reads allowed, no rewrite
+test('create_index: Postgres → danger, SHARE lock blocks writes but NOT reads, no table rewrite', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'create_index', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_create_index');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.lockType, 'SHARE');
+  assert.equal(v.blocksReads, false,  'SHARE lock must NOT block reads');
+  assert.equal(v.blocksWrites, true,  'SHARE lock must block writes');
+  assert.equal(v.rewritesTable, false, 'index build does not rewrite table data');
+});
+
+// 2. pg_create_index: safe alternative present and mentions CONCURRENTLY
+test('create_index: Postgres → safeAlternative.title references CONCURRENTLY', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'create_index', context: ctx() }, rules, quiet);
+  assert.ok(v.safeAlternative, 'should offer a safe alternative');
+  assert.match(v.safeAlternative.title, /CONCURRENTLY/i);
+});
+
+// 3. mssql_add_col_null: SQL Server add_column_nullable is metadata-only
+test('add_column_nullable: SQL Server → safe, metadata-only, no rewrite (mssql_add_col_null)', () => {
+  const v = resolveVerdict({ engine: 'sqlserver', version: '2022', operation: 'add_column_nullable', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mssql_add_col_null');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.lockType, 'metadata-only');
+  assert.equal(v.rewritesTable, false);
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+// 4. Version boundary: PG 11 exactly must match the v11plus rule (versionMin=11)
+test('add_column_constant_default: PG 11 exactly → v11plus rule (boundary: versionMin=11)', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '11', operation: 'add_column_constant_default', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_add_col_const_v11plus', 'PG 11 must match v11plus, not pre11');
+  assert.equal(v.severity, 'safe');
+});
+
+// 5. Version boundary: PG 9.6 → parseVersion gives 9, must match pre11 (versionMax=10)
+test('add_column_constant_default: PG 9.6 → pre11 rule (parseVersion("9.6")=9 ≤ 10)', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '9.6', operation: 'add_column_constant_default', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_add_col_const_pre11', 'PG 9.6 must match pre11 rule');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.rewritesTable, true);
+});
+
+// 6. Volatile default still rewrites on modern PG (PG 11+ only fixes *constant* defaults)
+test('add_column_volatile_default: Postgres 13 → still danger, full rewrite (volatile is never fast)', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '13', operation: 'add_column_volatile_default', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_add_col_volatile');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.rewritesTable, true);
+  assert.equal(v.blocksReads, true);
+  assert.equal(v.blocksWrites, true);
+});
+
+// 7. PG add_column_nullable has no version bounds — safe on all PG versions including 9.6
+test('add_column_nullable: Postgres 9.6 → safe (rule is version-agnostic)', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '9.6', operation: 'add_column_nullable', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'pg_add_col_nullable');
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.rewritesTable, false);
+});
+
+// 8. SHARE ROW EXCLUSIVE (add_foreign_key) conflicts with writes but allows reads
+test('add_foreign_key: Postgres → SHARE ROW EXCLUSIVE allows reads, blocks writes', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'add_foreign_key', context: ctx() }, rules, quiet);
+  assert.equal(v.lockType, 'SHARE ROW EXCLUSIVE');
+  assert.equal(v.blocksReads, false,  'SHARE ROW EXCLUSIVE must not block reads');
+  assert.equal(v.blocksWrites, true,  'SHARE ROW EXCLUSIVE must block writes');
+});
+
+// 9. PG add_column_const_v11plus caveats warn about volatile defaults
+test('add_column_constant_default: PG v11plus rule has caveats mentioning volatile', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'add_column_constant_default', context: ctx() }, rules, quiet);
+  assert.ok(v.caveats.length > 0, 'rule must have caveats');
+  const allCaveats = v.caveats.join(' ').toLowerCase();
+  assert.ok(allCaveats.includes('volatile'), 'caveats must mention volatile default exception');
+});
+
+// 10. Duration model: create_index uses index_build (not rewrite) — 50M rows → ~2 min
+test('create_index: Postgres 50M-row table → index_build model → ~2 min', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'create_index', context: ctx({ tableSizeRows: 50_000_000 }) }, rules, quiet);
+  assert.equal(v.estDurationSeconds, 100);
+  assert.equal(v.estDurationLabel, '~2 min');
+});
+
+// 11. Duration edge case: 0-row table is always instant, even for a rewrite model
+test('Duration: 0-row table → instant even for a rewrite operation', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '10', operation: 'add_column_constant_default', context: ctx({ tableSizeRows: 0 }) }, rules, quiet);
+  assert.equal(v.estDurationSeconds, 0);
+  assert.equal(v.estDurationLabel, 'instant');
+});
+
+// 12. Duration scale: 1B-row rewrite at 250k/s → 4000s → ~1 hr
+test('Duration: 1B-row rewrite at 250k rows/sec → 4000s → "~1 hr"', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '10', operation: 'add_column_constant_default', context: ctx({ tableSizeRows: 1_000_000_000 }) }, rules, quiet);
+  assert.equal(v.estDurationSeconds, 4000);
+  assert.equal(v.estDurationLabel, '~1 hr');
+});
+
+// 13. resolveVerdict accepts a bare rules array (not wrapped in {rules:[...]})
+test('resolveVerdict accepts bare rules array without wrapper object', () => {
+  const bareArray = rules.rules;
+  assert.ok(Array.isArray(bareArray), 'sanity: rules.rules must be an array');
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'add_column_nullable', context: ctx() }, bareArray, quiet);
+  assert.equal(v.severity, 'safe');
+  assert.equal(v.matchedRuleId, 'pg_add_col_nullable');
+});
+
+// 14. alter_column_type: MySQL 5.7 — rule has no version bounds, same danger verdict
+test('alter_column_type: MySQL 5.7 → danger, same rule as 8.0 (versionless rule)', () => {
+  const v = resolveVerdict({ engine: 'mysql', version: '5.7', operation: 'alter_column_type', context: ctx() }, rules, quiet);
+  assert.equal(v.matchedRuleId, 'mysql_modify_column');
+  assert.equal(v.severity, 'danger');
+  assert.equal(v.rewritesTable, true);
+});
+
+// 15. create_index_concurrent: Postgres → safeAlternative is null (CONCURRENTLY IS the safe option)
+test('create_index_concurrent: Postgres → safeAlternative is null (it is the safe path itself)', () => {
+  const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'create_index_concurrent', context: ctx() }, rules, quiet);
+  assert.equal(v.safeAlternative, null, 'CONCURRENTLY is itself the safe alternative; no further safe alt needed');
+});
+
+// 16. resolveVerdict with no context object → no crash, duration model still fires with 0 rows
+test('resolveVerdict with no context field → no crash, returns valid verdict', () => {
+  assert.doesNotThrow(() => {
+    const v = resolveVerdict({ engine: 'postgres', version: '16', operation: 'add_column_nullable' }, rules, quiet);
+    assert.equal(v.severity, 'safe');
+  });
+});
+
+// 17. estimateDuration: unknown model → seconds null, label "unknown"
+test('estimateDuration: unknown model string → null seconds, "unknown" label', () => {
+  const r = estimateDuration('magic_teleport', { tableSizeRows: 1_000_000 });
+  assert.equal(r.seconds, null);
+  assert.equal(r.label, 'unknown');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 test('collision hook fires when two equally-specific rules match', () => {
   // Two generic (unbounded, no-edition) rules for the same engine/operation.
   const colliding = {
