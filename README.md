@@ -310,7 +310,7 @@ src/
     rules.json      — 42 versioned lock-verdict rules (the source of truth)
     lookup.js       — pure ES module: resolveVerdict(input, rules) → verdict
     formulas.js     — pure ES module: duration math (rewrite / index_build models)
-    lookup.test.js  — 50 Node.js built-in test runner tests
+    lookup.test.js  — 67 Node.js built-in test runner tests
 ```
 
 The rules engine is **zero-dependency** and runs identically in the browser, Node.js, Deno, and any ES module environment. The UI is the only thing that requires a browser.
